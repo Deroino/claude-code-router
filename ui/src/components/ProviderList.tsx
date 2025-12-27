@@ -1,6 +1,7 @@
 import { Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { api } from "@/lib/api";
 import type { Provider } from "@/types";
 
 interface ProviderListProps {
@@ -62,12 +63,24 @@ export function ProviderList({ providers, onEdit, onRemove, showToast }: Provide
               <div className="flex flex-wrap gap-2 pt-2">
                 {models.map((model, modelIndex) => (
                   // Handle case where model might be null or undefined
-                  <Badge 
-                    key={modelIndex} 
-                    variant="outline" 
+                  <Badge
+                    key={modelIndex}
+                    variant="outline"
                     className="font-normal transition-all-ease hover:scale-105 cursor-pointer"
                     onClick={async () => {
                       const textToCopy = `${providerName},${model}`;
+                      try {
+                        const result = await api.testModel(providerName, model || "", "hello");
+                        if (result?.success) {
+                          showToast(`"${textToCopy}" test OK`, 'success');
+                        } else {
+                          showToast(`"${textToCopy}" test failed`, 'error');
+                        }
+                      } catch (err) {
+                        console.error('Model test failed: ', err);
+                        showToast(`"${textToCopy}" test failed`, 'error');
+                      }
+
                       try {
                         await navigator.clipboard.writeText(textToCopy);
                         showToast(`"${textToCopy}" copied to clipboard!`, 'success');

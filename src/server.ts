@@ -61,6 +61,51 @@ export const createServer = (config: any): Server => {
     }, 1000);
   });
 
+  server.app.post("/api/model-test", async (req, reply) => {
+    const { provider, model, message } = (req.body || {}) as {
+      provider?: string;
+      model?: string;
+      message?: string;
+    };
+
+    if (!provider || !model) {
+      reply.status(400).send({ success: false, error: "provider and model are required" });
+      return;
+    }
+
+    const payload = {
+      model: `${provider},${model}`,
+      messages: [{ role: "user", content: message || "hello" }],
+      max_tokens: 1,
+      stream: false,
+    };
+
+    try {
+      const res = await server.app.inject({
+        method: "POST",
+        url: "/v1/messages",
+        headers: {
+          "content-type": "application/json",
+          ...(config.APIKEY ? { "x-api-key": config.APIKEY } : {}),
+        },
+        payload,
+      });
+
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        return { success: true, status: res.statusCode };
+      }
+
+      reply.status(res.statusCode).send({
+        success: false,
+        status: res.statusCode,
+        body: res.body,
+      });
+    } catch (error) {
+      console.error("Model test failed:", error);
+      reply.status(500).send({ success: false, error: "Model test failed" });
+    }
+  });
+
   // Register static file serving with caching
   server.app.register(fastifyStatic, {
     root: join(__dirname, "..", "dist"),
