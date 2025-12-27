@@ -216,6 +216,36 @@ export interface RouterFallbackConfig {
 }
 
 export const router = async (req: any, _res: any, context: RouterContext) => {
+  // --- vvv TEMPORARY DEBUGGING CODE vvv ---
+  const MAGIC_CODE = "CCR_DEBUG_COMPACT_REQUEST"; // 我们约定的魔法代码
+
+  let shouldLog = false;
+  if (req.body && Array.isArray(req.body.messages)) {
+    // 查找最后一条用户消息
+    // 使用 findLast 来确保找到的是真正的最后一个用户消息
+    const lastUserMessage = req.body.messages.findLast((m: any) => m.role === "user");
+
+    if (lastUserMessage && typeof lastUserMessage.content === "string" && lastUserMessage.content.includes(MAGIC_CODE)) {
+      shouldLog = true;
+      // 移除魔法代码，以免它被发送给真正的模型，污染上下文
+      lastUserMessage.content = lastUserMessage.content.replace(MAGIC_CODE, "").trim();
+      // 如果移除后消息内容为空，可以考虑删除这条消息，避免发送空消息给模型
+      if (!lastUserMessage.content) {
+        const index = req.body.messages.lastIndexOf(lastUserMessage);
+        if (index > -1) {
+          req.body.messages.splice(index, 1);
+        }
+      }
+    }
+  }
+
+  if (shouldLog) {
+    req.log.info("--- RAW REQUEST BODY (MAGIC CODE DETECTED) ---");
+    req.log.info(req.body, "Request Body");
+    req.log.info("--- END RAW REQUEST BODY ---");
+  }
+  // --- ^^^ TEMPORARY DEBUGGING CODE ^^^ ---
+
   const { configService, event } = context;
   // Parse sessionId from metadata.user_id
   if (req.body.metadata?.user_id) {

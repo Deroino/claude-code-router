@@ -235,6 +235,15 @@ class ApiClient {
     return this.post<{ success: boolean; message: string }>('/api/update/perform', {});
   }
 
+  // Test a specific provider+model
+  async testModel(provider: string, model: string, message: string = "hello"): Promise<{ success: boolean; status?: number }> {
+    return this.post<{ success: boolean; status?: number }>("/model-test", {
+      provider,
+      model,
+      message,
+    });
+  }
+
   // Get log files list
   async getLogFiles(): Promise<Array<{ name: string; path: string; size: number; lastModified: string }>> {
     return this.get<Array<{ name: string; path: string; size: number; lastModified: string }>>('/logs/files');
