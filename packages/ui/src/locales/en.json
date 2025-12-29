@@ -118,6 +118,7 @@
     "webSearch": "Web Search",
     "image": "Image",
     "forceUseImageAgent": "Force Use Image Agent",
+    "compact": "Compact (Chat Summarization)",
     "selectModel": "Select a model...",
     "searchModel": "Search model...",
     "noModelFound": "No model found."

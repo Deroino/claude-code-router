@@ -19,6 +19,7 @@ export interface RouterConfig {
     longContextThreshold: number;
     webSearch: string;
     image: string;
+    compact?: string;
     custom?: any;
 }
 

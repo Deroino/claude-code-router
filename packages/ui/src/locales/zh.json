@@ -118,6 +118,7 @@
     "webSearch": "网络搜索",
     "image": "图像",
     "forceUseImageAgent": "强制使用图像代理",
+    "compact": "压缩（对话摘要）",
     "selectModel": "选择一个模型...",
     "searchModel": "搜索模型...",
     "noModelFound": "未找到模型."

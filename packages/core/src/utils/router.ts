@@ -183,6 +183,20 @@ const getUseModel = async (
     req.log.info(`Using background model for ${req.body.model}`);
     return { model: globalRouter.background, scenarioType: 'background' };
   }
+  // Detect compact requests by checking for the specific prompt pattern in the last user message
+  const COMPACT_PROMPT_MARKER = "create a detailed summary of the conversation";
+  if (Array.isArray(req.body.messages)) {
+    const lastUserMessage = req.body.messages.findLast((m: any) => m.role === "user");
+    if (lastUserMessage) {
+      const messageContent = typeof lastUserMessage.content === "string"
+        ? lastUserMessage.content
+        : (Array.isArray(lastUserMessage.content) ? lastUserMessage.content.map((c: any) => c.text).join(" ") : "");
+      if (messageContent.includes(COMPACT_PROMPT_MARKER) && config.Router.compact) {
+        req.log.info(`Using compact model for summary request`);
+        return config.Router.compact;
+      }
+    }
+  }
   // The priority of websearch must be higher than thinking.
   if (
     Array.isArray(req.body.tools) &&
