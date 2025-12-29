@@ -7,3 +7,4 @@ dist
 .vscode
 tsconfig.tsbuildinfo
 package-lock.json
+ui/tsconfig.tsbuildinfo
