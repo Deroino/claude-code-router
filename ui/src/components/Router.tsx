@@ -31,7 +31,8 @@ export function Router() {
     longContext: "",
     longContextThreshold: 60000,
     webSearch: "",
-    image: ""
+    image: "",
+    compact: ""
   };
 
   const handleRouterChange = (field: string, value: string | number) => {
@@ -164,6 +165,17 @@ export function Router() {
               </select>
             </div>
           </div>
+        </div>
+        <div className="space-y-2">
+          <Label>{t("router.compact")}</Label>
+          <Combobox
+            options={modelOptions}
+            value={routerConfig.compact || ""}
+            onChange={(value) => handleRouterChange("compact", value)}
+            placeholder={t("router.selectModel")}
+            searchPlaceholder={t("router.searchModel")}
+            emptyPlaceholder={t("router.noModelFound")}
+          />
         </div>
       </CardContent>
     </Card>
