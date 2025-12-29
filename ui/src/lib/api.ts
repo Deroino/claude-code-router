@@ -101,15 +101,22 @@ class ApiClient {
         return new Promise(() => {}) as Promise<T>;
       }
 
+      const text = await response.text();
+
       if (!response.ok) {
-        throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+        const error: Error & { status?: number; statusText?: string; body?: string } = new Error(
+          `API request failed: ${response.status} ${response.statusText}`
+        );
+        error.status = response.status;
+        error.statusText = response.statusText;
+        error.body = text || undefined;
+        throw error;
       }
-      
+
       if (response.status === 204) {
         return {} as T;
       }
-      
-      const text = await response.text();
+
       return text ? JSON.parse(text) : ({} as T);
 
     } catch (error) {
