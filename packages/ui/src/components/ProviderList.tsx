@@ -1,4 +1,4 @@
-import { Pencil, Trash2 } from "lucide-react";
+import { Pencil, Trash2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
@@ -66,21 +66,12 @@ export function ProviderList({ providers, onEdit, onRemove, showToast }: Provide
                   <Badge
                     key={modelIndex}
                     variant="outline"
-                    className="font-normal transition-all-ease hover:scale-105 cursor-pointer"
-                    onClick={async () => {
-                      const textToCopy = `${providerName},${model}`;
-                      try {
-                        const result = await api.testModel(providerName, model || "", "hello");
-                        if (result?.success) {
-                          showToast(`"${textToCopy}" test OK`, 'success');
-                        } else {
-                          showToast(`"${textToCopy}" test failed`, 'error');
-                        }
-                      } catch (err) {
-                        console.error('Model test failed: ', err);
-                        showToast(`"${textToCopy}" test failed`, 'error');
-                      }
+                    className="font-normal transition-all-ease hover:scale-105 cursor-pointer pr-1 flex items-center gap-1"
+                    onClick={async (e) => {
+                      // 阻止事件冒泡，防止点击Badge整体时触发两次（如果未来有其他逻辑）
+                      // 目前主要逻辑都在这里，暂时不需要 e.stopPropagation()
 
+                      const textToCopy = `${providerName},${model}`;
                       try {
                         await navigator.clipboard.writeText(textToCopy);
                         showToast(`"${textToCopy}" copied to clipboard!`, 'success');
@@ -90,7 +81,45 @@ export function ProviderList({ providers, onEdit, onRemove, showToast }: Provide
                       }
                     }}
                   >
-                    {model || "Unnamed Model"}
+                    <span>{model || "Unnamed Model"}</span>
+                    <span
+                      className="p-0.5 rounded-full hover:bg-gray-200 transition-colors"
+                      title="Test availability"
+                      onClick={async (e) => {
+                        e.stopPropagation(); // 阻止触发 Badge 的复制事件
+
+                        const textToTest = `${providerName},${model}`;
+                        showToast(`Testing ${textToTest}...`, 'warning');
+
+                        try {
+                          const result = await api.testModel(providerName, model || "", "hello");
+                          if (result?.success) {
+                            showToast(`"${textToTest}" test OK`, 'success');
+                          } else {
+                            showToast(`"${textToTest}" test failed`, 'error');
+                          }
+                        } catch (err) {
+                          console.error('Model test failed: ', err);
+                          let detail = 'Unknown error';
+                          if (err && typeof err === 'object') {
+                            const anyErr = err as { body?: string; message?: string };
+                            if (anyErr.body) {
+                              try {
+                                const parsed = JSON.parse(anyErr.body);
+                                detail = parsed?.error?.message || parsed?.message || anyErr.body;
+                              } catch {
+                                detail = anyErr.body;
+                              }
+                            } else if (anyErr.message) {
+                              detail = anyErr.message;
+                            }
+                          }
+                          showToast(`"${textToTest}" test failed: ${detail}`, 'error');
+                        }
+                      }}
+                    >
+                      <Zap className="h-3 w-3 text-amber-500 fill-amber-500" />
+                    </span>
                   </Badge>
                 ))}
               </div>

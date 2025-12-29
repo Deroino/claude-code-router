@@ -101,25 +101,22 @@ class ApiClient {
         return new Promise(() => {}) as Promise<T>;
       }
 
+      const text = await response.text();
+
       if (!response.ok) {
-        // Try to get detailed error message from response body
-        let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
-        try {
-          const errorData = await response.json();
-          if (errorData.error || errorData.message) {
-            errorMessage = errorData.message || errorData.error || errorMessage;
-          }
-        } catch {
-          // If parsing fails, use default error message
-        }
-        throw new Error(errorMessage);
+        const error: Error & { status?: number; statusText?: string; body?: string } = new Error(
+          `API request failed: ${response.status} ${response.statusText}`
+        );
+        error.status = response.status;
+        error.statusText = response.statusText;
+        error.body = text || undefined;
+        throw error;
       }
 
       if (response.status === 204) {
         return {} as T;
       }
 
-      const text = await response.text();
       return text ? JSON.parse(text) : ({} as T);
 
     } catch (error) {
