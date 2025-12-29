@@ -12,3 +12,4 @@ docs/build
 docs/.docusaurus
 
 package-lock.json
+ui/tsconfig.tsbuildinfo
