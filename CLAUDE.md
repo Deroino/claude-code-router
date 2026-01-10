@@ -37,6 +37,26 @@ pnpm dev:ui         # Develop UI (Vite)
 pnpm release        # Build and publish all packages
 ```
 
+## Development Scripts
+
+### Quick Rebuild Script
+
+After modifying code, use the `dev-rebuild.sh` script to quickly rebuild and restart:
+
+```bash
+./dev-rebuild.sh
+```
+
+This script automatically:
+1. Cleans cache and build artifacts
+2. Installs dependencies
+3. Builds all packages
+4. Globally installs the CLI (`npm install . -g`)
+5. Restarts the service
+6. Clears debug log file
+
+This is faster than manually running each step and ensures all changes are properly applied.
+
 ## Core Architecture
 
 ### 1. Routing System (packages/server/src/utils/router.ts)
