@@ -350,7 +350,7 @@ async function sendRequestToProvider(
     }
   }
 
-  const response = await sendUnifiedRequest(
+  let response = await sendUnifiedRequest(
     url,
     requestBody,
     {
@@ -364,7 +364,81 @@ async function sendRequestToProvider(
 
   // Handle request errors
   if (!response.ok) {
+    // Read error text first (body can only be read once)
     const errorText = await response.text();
+
+    fastify.log.info(`[DEBUG] Error response received, checking transformers for model: ${requestBody.model}`);
+
+    // Helper function to execute logErrorResponse on transformers
+    const executeLogError = async (transformerConfig: any) => {
+      let transformerName: string;
+      let transformerOptions: any = {};
+
+      if (typeof transformerConfig === 'string') {
+        transformerName = transformerConfig;
+      } else {
+        transformerName = transformerConfig.name;
+        transformerOptions = transformerConfig.options || {};
+      }
+
+      const transformerInstance = fastify.transformerService.getTransformer(transformerName);
+
+      if (transformerInstance) {
+        // If it's a constructor (class), we might need to instantiate it, or it might be a static class
+        // But based on TransformerService implementation, most are registered as instances.
+        // However, if it requires options for this specific call, we might face a challenge if it's a singleton.
+        // For 'debug' transformer, it is instantiated with options.
+
+        // Check if we need to/can create a new instance with specific options
+        // If the registered transformer is a class constructor
+        let instance: any = transformerInstance;
+
+        if (typeof transformerInstance === 'function' && /^\s*class\s+/.test(transformerInstance.toString())) {
+             try {
+                instance = new (transformerInstance as any)(transformerOptions);
+                // Inject logger if needed
+                 if (instance && typeof instance === 'object') {
+                    (instance as any).logger = fastify.log;
+                 }
+             } catch (e) {
+                 fastify.log.warn(`Failed to instantiate transformer ${transformerName}: ${e}`);
+                 return;
+             }
+        }
+
+        // If it's the debug transformer and we have specific options for this provider/model configuration,
+        // we might want to ensure we're using those options.
+        // The current DebugTransformer implementation takes options in constructor.
+
+        if (typeof instance.logErrorResponse === "function") {
+          try {
+            fastify.log.info(`[DEBUG] Executing logErrorResponse for ${transformerName}`);
+            await instance.logErrorResponse(response, errorText, context);
+          } catch (transformError) {
+            fastify.log.warn(`Failed to log error response for ${transformerName}: ${transformError}`);
+          }
+        }
+      } else {
+          fastify.log.warn(`Transformer ${transformerName} not found in service`);
+      }
+    };
+
+    // Check provider-level transformers
+    if (provider.transformer?.use?.length) {
+      fastify.log.info(`[DEBUG] Checking ${provider.transformer.use.length} provider-level transformers`);
+      for (const transformerConfig of provider.transformer.use) {
+        await executeLogError(transformerConfig);
+      }
+    }
+
+    // Check model-specific transformers
+    if (provider.transformer?.[requestBody.model]?.use?.length) {
+      fastify.log.info(`[DEBUG] Checking ${provider.transformer[requestBody.model].use.length} model-specific transformers for ${requestBody.model}`);
+      for (const transformerConfig of provider.transformer[requestBody.model].use) {
+         await executeLogError(transformerConfig);
+      }
+    }
+
     fastify.log.error(
       `[provider_response_error] Error from provider(${provider.name},${requestBody.model}: ${response.status}): ${errorText}`,
     );

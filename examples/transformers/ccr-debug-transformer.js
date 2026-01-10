@@ -45,6 +45,10 @@ module.exports = class DebugTransformer {
     const requestId = context?.requestId;
     const isError = !response.ok;
 
+    // 读取响应体
+    const bodyText = await response.text();
+    const responseBody = this.parseResponseBody(bodyText);
+
     const responseData = {
       timestamp: new Date().toISOString(),
       requestId,
@@ -52,17 +56,13 @@ module.exports = class DebugTransformer {
       statusText: response.statusText,
       isError,
       headers: Object.fromEntries(response.headers.entries()),
-      response: await this.captureResponseBody(response)
+      response: responseBody
     };
 
-    // 如果不是只在错误时记录，或者响应是错误的，都记录
-    if (!this.logOnlyOnError || isError) {
+    // 只在非错误且不为"仅错误日志"模式时记录
+    // 错误情况由 logErrorResponse 处理
+    if (!isError && !this.logOnlyOnError) {
       this.log('RESPONSE', responseData);
-      
-      // 如果只在错误时记录，并且现在出错了，也要记录对应的请求
-      if (this.logOnlyOnError && isError && requestId && this.requestBuffer.has(requestId)) {
-        this.log('REQUEST (for error)', this.requestBuffer.get(requestId));
-      }
     }
 
     // 清理缓存
@@ -70,24 +70,61 @@ module.exports = class DebugTransformer {
       this.requestBuffer.delete(requestId);
     }
 
-    return response;
+    // 重新创建 Response 对象并返回
+    return this.cloneResponse(response, bodyText);
   }
 
-  async captureResponseBody(response) {
-    try {
-      const text = await response.text();
-      
-      // 尝试解析为 JSON
-      try {
-        const json = JSON.parse(text);
-        return json;
-      } catch {
-        // 不是 JSON，返回原始文本
-        return text;
-      }
-    } catch (error) {
-      return `[Error reading response body: ${error.message}]`;
+  // 专门用于记录错误响应的方法（不消耗 body）
+  async logErrorResponse(response, errorText, context) {
+    const requestId = context?.requestId;
+    const isError = !response.ok;
+
+    const responseBody = this.parseResponseBody(errorText);
+
+    const responseData = {
+      timestamp: new Date().toISOString(),
+      requestId,
+      status: response.status,
+      statusText: response.statusText,
+      isError,
+      headers: Object.fromEntries(response.headers.entries()),
+      response: responseBody
+    };
+
+    // 记录错误响应
+    this.log('RESPONSE (ERROR)', responseData);
+
+    // 如果只在错误时记录，也要记录对应的请求
+    if (this.logOnlyOnError && requestId && this.requestBuffer.has(requestId)) {
+      this.log('REQUEST (for error)', this.requestBuffer.get(requestId));
     }
+
+    // 清理缓存
+    if (requestId) {
+      this.requestBuffer.delete(requestId);
+    }
+  }
+
+  parseResponseBody(text) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+
+  // 重新创建 Response 对象，避免 body 被消耗
+  async cloneResponse(response, bodyText) {
+    const headers = new Headers();
+    response.headers.forEach((value, key) => {
+      headers.set(key, value);
+    });
+
+    return new Response(bodyText, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: headers
+    });
   }
 
   sanitizeRequest(request) {
