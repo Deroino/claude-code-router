@@ -4,7 +4,7 @@ import { defineConfig } from "vite"
 import { viteSingleFile } from "vite-plugin-singlefile"
 import tailwindcss from "@tailwindcss/vite"
 
- 
+
 export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss(), viteSingleFile()],
@@ -12,5 +12,8 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+  },
+  build: {
+    minify: false,
   },
 })
