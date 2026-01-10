@@ -113,6 +113,111 @@ export const createServer = async (config: any): Promise<any> => {
     return { success: true, message: "Config saved successfully" };
   });
 
+  // Add endpoint to test a specific provider+model
+  app.post("/api/model-test", async (req: any, reply: any) => {
+    try {
+      const { provider, model, message } = req.body;
+
+      if (!provider || !model) {
+        reply.status(400).send({ success: false, error: "provider and model are required" });
+        return;
+      }
+
+      const serverInstance = (app as any)._server;
+      const providerService = serverInstance.providerService;
+      const transformerService = serverInstance.transformerService;
+
+      // Get provider
+      const providerData = providerService.getProvider(provider);
+      if (!providerData) {
+        reply.status(404).send({ success: false, error: `Provider '${provider}' not found` });
+        return;
+      }
+
+      // Check if model exists in provider
+      if (!providerData.models.includes(model)) {
+        reply.status(400).send({ success: false, error: `Model '${model}' not found in provider '${provider}'` });
+        return;
+      }
+
+      // Construct test request
+      const testMessage = message || "Hello, please respond with 'OK' if you can understand this message.";
+      const requestBody = {
+        model: model,
+        messages: [
+          {
+            role: "user",
+            content: testMessage
+          }
+        ],
+        max_tokens: 10,
+        stream: false
+      };
+
+      // Apply provider transformers if configured
+      let processedRequest = requestBody;
+      if (providerData.transformer?.use) {
+        for (const transformer of providerData.transformer.use) {
+          if (transformer && typeof transformer.transformRequestIn === "function") {
+            processedRequest = await transformer.transformRequestIn(processedRequest);
+          }
+        }
+      }
+
+      // Apply model-specific transformers if configured
+      if (providerData.transformer?.[model]?.use) {
+        for (const transformer of providerData.transformer[model].use) {
+          if (transformer && typeof transformer.transformRequestIn === "function") {
+            processedRequest = await transformer.transformRequestIn(processedRequest);
+          }
+        }
+      }
+
+      // Send request to provider
+      const response = await fetch(providerData.baseUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${providerData.apiKey}`
+        },
+        body: JSON.stringify(processedRequest)
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return {
+          success: true,
+          status: response.status,
+          data: data
+        };
+      } else {
+        const errorText = await response.text();
+        let errorData = errorText;
+
+        // Try to parse error as JSON to remove escaped characters
+        try {
+          const parsed = JSON.parse(errorText);
+          errorData = parsed;
+        } catch (e) {
+          // If not valid JSON, keep as is
+        }
+
+        reply.status(response.status).send({
+          success: false,
+          status: response.status,
+          error: errorData
+        });
+        return;
+      }
+    } catch (error: any) {
+      reply.status(500).send({
+        success: false,
+        error: error.message || "Unknown error occurred"
+      });
+      return;
+    }
+  });
+
   // Register static file serving with caching
   app.register(fastifyStatic, {
     root: join(__dirname, "..", "dist"),
