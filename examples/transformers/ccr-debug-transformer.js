@@ -94,11 +94,28 @@ module.exports = class DebugTransformer {
     // 创建请求的副本，隐藏敏感信息
     const sanitized = {
       model: request.model,
-      messages: request.messages?.map(msg => ({
-        role: msg.role,
-        content: msg.content?.substring(0, 500) + (msg.content?.length > 500 ? '... (truncated)' : ''),
-        hasImages: msg.content && Array.isArray(msg.content) && msg.content.some(c => c.type === 'image')
-      })),
+      messages: request.messages?.map(msg => {
+        // 处理 content 可能是字符串或数组的情况
+        let contentPreview = '';
+        let hasImages = false;
+        
+        if (typeof msg.content === 'string') {
+          contentPreview = msg.content.substring(0, 500) + (msg.content.length > 500 ? '... (truncated)' : '');
+        } else if (Array.isArray(msg.content)) {
+          hasImages = msg.content.some(c => c.type === 'image');
+          const textContent = msg.content.find(c => c.type === 'text');
+          if (textContent && typeof textContent.text === 'string') {
+            contentPreview = textContent.text.substring(0, 500) + (textContent.text.length > 500 ? '... (truncated)' : '');
+          }
+          contentPreview += ` [${msg.content.length} items, ${hasImages ? 'includes images' : 'text only'}]`;
+        }
+        
+        return {
+          role: msg.role,
+          content: contentPreview,
+          hasImages
+        };
+      }),
       tools: request.tools?.map(tool => ({
         name: tool.function?.name,
         description: tool.function?.description?.substring(0, 200),
