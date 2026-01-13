@@ -2,8 +2,9 @@ import Server, { calculateTokenCount, TokenizerService } from "@musistudio/llms"
 import { readConfigFile, writeConfigFile, backupConfigFile } from "./utils";
 import { join } from "path";
 import fastifyStatic from "@fastify/static";
-import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, rmSync } from "fs";
+import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, rmSync, watch, openSync, readSync, closeSync } from "fs";
 import { homedir } from "os";
+import { ReadableStream } from "stream/web";
 import {
   getPresetDir,
   readManifestFromDir,
@@ -230,6 +231,162 @@ export const createServer = async (config: any): Promise<any> => {
     return reply.redirect("/ui/");
   });
 
+  // SSE log streaming endpoint
+  app.get("/api/logs/stream", async (req: any, reply: any) => {
+    // Set SSE headers
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.setHeader("Access-Control-Allow-Origin", "*");
+
+    const logDir = join(homedir(), ".claude-code-router", "logs");
+    let currentLogFile = "";
+    let fileWatcher: any = null;
+    let dirWatcher: any = null;
+    let lastSize = 0;
+    let isClosed = false;
+
+    // Helper to find latest log file
+    const findLatestLog = () => {
+      if (!existsSync(logDir)) return null;
+      const files = readdirSync(logDir)
+        .filter(f => f.startsWith("ccr-") && f.endsWith(".log"))
+        .sort()
+        .reverse();
+      return files.length > 0 ? join(logDir, files[0]) : null;
+    };
+
+    // Helper to setup file watcher on specific file
+    const setupFileWatcher = (filePath: string, controller: any) => {
+      if (fileWatcher) fileWatcher.close();
+
+      try {
+        const stats = statSync(filePath);
+        lastSize = stats.size;
+        currentLogFile = filePath;
+
+        // Notify client about file switch
+        controller.enqueue(`data: ${JSON.stringify({
+          type: 'system',
+          msg: `Watching log file: ${filePath.split('/').pop()}`
+        })}\n\n`);
+
+        fileWatcher = watch(filePath, { persistent: true }, (eventType) => {
+          if (eventType === 'change' && !isClosed && existsSync(filePath)) {
+            try {
+              const currentStats = statSync(filePath);
+              if (currentStats.size > lastSize) {
+                const fd = openSync(filePath, 'r');
+                const buffer = Buffer.alloc(currentStats.size - lastSize);
+                readSync(fd, buffer, 0, buffer.length, lastSize);
+                closeSync(fd);
+
+                const newContent = buffer.toString('utf8');
+                lastSize = currentStats.size;
+
+                const lines = newContent.split('\n');
+                for (const line of lines) {
+                  if (!line.trim()) continue;
+                  try {
+                    const data = JSON.parse(line);
+                    // Filter: only send relevant info
+                    // Priority: routing targetModel > request body model > data.model
+                    let model = data.targetModel || data.req?.body?.model || data.data?.model;
+                    const provider = data.provider || data.data?.provider;
+                    // Also check for type="request body" which usually contains model info
+                    const isRequestBody = data.type === 'request body';
+                    // Check for routing messages
+                    const isRouting = data.type === 'routing' || data.msg?.includes('routing') || data.msg?.includes('selected model');
+
+                    if (model || provider || isRouting || isRequestBody) {
+                      const event = {
+                        type: 'log',
+                        data: {
+                          id: `${data.reqId}-${data.time}`,
+                          timestamp: new Date(data.time).toLocaleTimeString(),
+                          reqId: data.reqId,
+                          model: model,
+                          provider: provider,
+                          msg: data.msg,
+                          raw: line
+                        }
+                      };
+                      controller.enqueue(`data: ${JSON.stringify(event)}\n\n`);
+                    }
+                  } catch (e) {
+                    // Ignore parse errors
+                  }
+                }
+              }
+            } catch (err) {
+              console.error('Error reading log update:', err);
+            }
+          }
+        });
+      } catch (err) {
+        console.error('Error setting up file watcher:', err);
+      }
+    };
+
+    const sseStream = new ReadableStream({
+      start(controller) {
+        const initialFile = findLatestLog();
+        if (initialFile) {
+          setupFileWatcher(initialFile, controller);
+        } else {
+          controller.enqueue(`data: ${JSON.stringify({ type: 'system', msg: 'No log files found' })}\n\n`);
+        }
+
+        // Watch directory for rotation (new files)
+        try {
+          if (existsSync(logDir)) {
+            dirWatcher = watch(logDir, { persistent: true }, (eventType, filename) => {
+              if (filename && filename.startsWith("ccr-") && filename.endsWith(".log")) {
+                const latest = findLatestLog();
+                if (latest && latest !== currentLogFile) {
+                  setupFileWatcher(latest, controller);
+                }
+              }
+            });
+          }
+        } catch (err) {
+          console.error('Error watching log directory:', err);
+        }
+
+        // Cleanup on close
+        req.raw.on('close', () => {
+          isClosed = true;
+          if (fileWatcher) fileWatcher.close();
+          if (dirWatcher) dirWatcher.close();
+          try { controller.close(); } catch (e) {}
+        });
+
+        req.raw.on('error', () => {
+          isClosed = true;
+          if (fileWatcher) fileWatcher.close();
+          if (dirWatcher) dirWatcher.close();
+          try { controller.close(); } catch (e) {}
+        });
+      }
+    });
+
+    // Pipe stream to response
+    const reader = sseStream.getReader();
+    const pump = () => {
+      reader.read().then(({ done, value }) => {
+        if (done) {
+          reply.raw.end();
+          return;
+        }
+        reply.raw.write(value);
+        pump();
+      }).catch(() => {
+        reply.raw.end();
+      });
+    };
+    pump();
+  });
+
   // Get log file list endpoint
   app.get("/api/logs/files", async (req: any, reply: any) => {
     try {
@@ -314,6 +471,33 @@ export const createServer = async (config: any): Promise<any> => {
     } catch (error) {
       console.error("Failed to clear logs:", error);
       reply.status(500).send({ error: "Failed to clear logs" });
+    }
+  });
+
+  // Clear all logs endpoint
+  app.delete("/api/logs/all", async (req: any, reply: any) => {
+    try {
+      const logDir = join(homedir(), ".claude-code-router", "logs");
+
+      if (existsSync(logDir)) {
+        const files = readdirSync(logDir);
+        for (const file of files) {
+          if (file.endsWith('.log')) {
+            const filePath = join(logDir, file);
+            try {
+              // Delete the file
+              unlinkSync(filePath);
+            } catch (err) {
+              console.error(`Failed to delete log file ${file}:`, err);
+            }
+          }
+        }
+      }
+
+      return { success: true, message: "All logs cleared successfully" };
+    } catch (error) {
+      console.error("Failed to clear all logs:", error);
+      reply.status(500).send({ error: "Failed to clear all logs" });
     }
   });
 

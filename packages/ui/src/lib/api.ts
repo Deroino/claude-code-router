@@ -256,6 +256,11 @@ class ApiClient {
     return this.delete<void>(`/logs?file=${encodeURIComponent(filePath)}`);
   }
 
+  // Clear all log files
+  async clearAllLogs(): Promise<void> {
+    return this.delete<void>('/logs/all');
+  }
+
   // ========== Preset API methods ==========
 
   // Get presets list
