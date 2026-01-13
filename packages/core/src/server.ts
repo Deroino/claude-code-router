@@ -144,10 +144,18 @@ class Server {
         fastify.addHook('preHandler', async (req: any, reply: any) => {
           const url = new URL(`http://127.0.0.1${req.url}`);
           if (url.pathname.endsWith("/v1/messages")) {
+            const originalModel = req.body?.model;
             await router(req, reply, {
               configService: this.configService,
               tokenizerService: this.tokenizerService,
             });
+            // Log routing decision (always log, even if model didn't change)
+            req.log.info({
+              type: 'routing',
+              originalModel: originalModel,
+              targetModel: req.body?.model,
+              scenarioType: req.scenarioType
+            }, `Routing: ${originalModel} -> ${req.body?.model}`);
           }
         });
         await registerApiRoutes(fastify);
@@ -185,10 +193,18 @@ class Server {
       fastify.addHook('preHandler', async (req: any, reply: any) => {
         const url = new URL(`http://127.0.0.1${req.url}`);
         if (url.pathname.endsWith("/v1/messages")) {
+          const originalModel = req.body?.model;
           await router(req, reply, {
             configService,
             tokenizerService,
           });
+          // Log routing decision (always log, even if model didn't change)
+          req.log.info({
+            type: 'routing',
+            originalModel: originalModel,
+            targetModel: req.body?.model,
+            scenarioType: req.scenarioType
+          }, `Routing: ${originalModel} -> ${req.body?.model}`);
         }
       });
       await registerApiRoutes(fastify);

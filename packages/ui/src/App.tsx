@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { SettingsDialog } from "@/components/SettingsDialog";
@@ -10,7 +10,8 @@ import { LogViewer } from "@/components/LogViewer";
 import { Button } from "@/components/ui/button";
 import { useConfig } from "@/components/ConfigProvider";
 import { api } from "@/lib/api";
-import { Settings, Languages, Save, RefreshCw, FileJson, CircleArrowUp, FileText, FileCog } from "lucide-react";
+import { useModelMonitorLogs } from "@/hooks/useModelMonitorLogs";
+import { Settings, Languages, Save, RefreshCw, FileJson, CircleArrowUp, FileText, FileCog, Activity } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -35,6 +36,22 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isJsonEditorOpen, setIsJsonEditorOpen] = useState(false);
   const [isLogViewerOpen, setIsLogViewerOpen] = useState(false);
+  const [isModelMonitorOpen, setIsModelMonitorOpen] = useState(false);
+
+  const { logs: modelMonitorLogs, currentFile: modelMonitorFile, status: modelMonitorStatus } = useModelMonitorLogs({
+    isOpen: isModelMonitorOpen,
+    maxItems: 50
+  });
+
+  const modelMonitorEndRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom when logs update
+  useEffect(() => {
+    if (isModelMonitorOpen && modelMonitorEndRef.current) {
+      modelMonitorEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [modelMonitorLogs, isModelMonitorOpen]);
+
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
   // 版本检查状态
@@ -288,6 +305,16 @@ function App() {
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon" onClick={() => setIsModelMonitorOpen(true)} className="transition-all-ease hover:scale-110">
+                <Activity className="h-5 w-5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Model Monitor</p>
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
               <Button variant="ghost" size="icon" onClick={() => setIsJsonEditorOpen(true)} className="transition-all-ease hover:scale-110">
                 <FileJson className="h-5 w-5" />
               </Button>
@@ -405,6 +432,59 @@ function App() {
         showToast={(message, type) => setToast({ message, type })} 
       />
       {/* 版本更新对话框 */}
+      <Dialog open={isModelMonitorOpen} onOpenChange={setIsModelMonitorOpen}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              Model Monitor
+              {modelMonitorStatus === 'connecting' && (
+                <span className="text-xs font-normal text-muted-foreground">(Connecting...)</span>
+              )}
+              {modelMonitorFile && (
+                <span className="text-xs font-normal text-muted-foreground truncate max-w-[200px]" title={modelMonitorFile}>
+                  ({modelMonitorFile})
+                </span>
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              Live view of request routing targets (auto-follows new log files)
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] overflow-y-auto py-4 text-sm font-mono">
+            <div className="space-y-1">
+              {modelMonitorLogs.length === 0 ? (
+                <div className="text-muted-foreground text-center py-8">Waiting for requests...</div>
+              ) : (
+                modelMonitorLogs.map((log) => (
+                  <div key={log.id} className="rounded-sm border bg-muted/30 px-3 py-1.5 hover:bg-muted/50 transition-colors">
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground mb-0.5">
+                      <span>{log.timestamp}</span>
+                      {log.reqId && <span>[{log.reqId}]</span>}
+                    </div>
+                    <div className="break-all">
+                      {log.model ? (
+                        <>
+                          <span className="font-semibold text-primary">[{log.scenarioLabel || '普通任务'}] </span>
+                          <span className="font-medium">{log.model}</span>
+                          {log.provider && <span className="text-muted-foreground ml-2">({log.provider})</span>}
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">{log.raw}</span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+              <div ref={modelMonitorEndRef} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsModelMonitorOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={isUpdateDialogOpen} onOpenChange={setIsUpdateDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>

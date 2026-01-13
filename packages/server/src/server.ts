@@ -289,24 +289,30 @@ export const createServer = async (config: any): Promise<any> => {
                   if (!line.trim()) continue;
                   try {
                     const data = JSON.parse(line);
-                    // Filter: only send relevant info
-                    // Priority: routing targetModel > request body model > data.model
-                    let model = data.targetModel || data.req?.body?.model || data.data?.model;
-                    const provider = data.provider || data.data?.provider;
-                    // Also check for type="request body" which usually contains model info
-                    const isRequestBody = data.type === 'request body';
-                    // Check for routing messages
-                    const isRouting = data.type === 'routing' || data.msg?.includes('routing') || data.msg?.includes('selected model');
+                    // Only send routing logs (skip request body logs)
+                    if (data.type === 'routing' && data.targetModel) {
+                      // Translate scenarioType to Chinese label
+                      const scenarioType = data.scenarioType as string;
+                      const scenarioLabel: Record<string, string> = {
+                        'background': '后台任务',
+                        'default': '普通任务',
+                        'longContext': '长上下文',
+                        'think': '思考任务',
+                        'webSearch': '搜索任务',
+                        'compact': '压缩任务',
+                        'image': '图片任务'
+                      };
+                      const label = scenarioLabel[scenarioType] || '普通任务';
 
-                    if (model || provider || isRouting || isRequestBody) {
                       const event = {
                         type: 'log',
                         data: {
                           id: `${data.reqId}-${data.time}`,
                           timestamp: new Date(data.time).toLocaleTimeString(),
                           reqId: data.reqId,
-                          model: model,
-                          provider: provider,
+                          model: data.targetModel,
+                          scenarioType: scenarioType,
+                          scenarioLabel: label,
                           msg: data.msg,
                           raw: line
                         }
