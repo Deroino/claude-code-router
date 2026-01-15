@@ -68,6 +68,7 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
         
         // Validate the received data to ensure it has the expected structure
         const validConfig = {
+          noAuth: typeof data.noAuth === 'boolean' ? data.noAuth : false,
           LOG: typeof data.LOG === 'boolean' ? data.LOG : false,
           LOG_LEVEL: typeof data.LOG_LEVEL === 'string' ? data.LOG_LEVEL : 'debug',
           CLAUDE_PATH: typeof data.CLAUDE_PATH === 'string' ? data.CLAUDE_PATH : '',

@@ -56,6 +56,7 @@ export interface Config {
   transformers: Transformer[];
   StatusLine?: StatusLineConfig;
   forceUseImageAgent?: boolean;
+  noAuth?: boolean;
   // Top-level settings
   LOG: boolean;
   LOG_LEVEL: string;

@@ -3,8 +3,13 @@ import { FastifyRequest, FastifyReply } from "fastify";
 export const apiKeyAuth =
   (config: any) =>
   async (req: FastifyRequest, reply: FastifyReply, done: () => void) => {
+    // Check if authentication is explicitly disabled via config
+    if (config.noAuth === true) {
+      return done();
+    }
+
     // Public endpoints that don't require authentication
-    const publicPaths = ["/", "/health", "/api/logs/stream"];
+    const publicPaths = ["/", "/health", "/api/logs/stream", "/api/model-test"];
     if (publicPaths.includes(req.url) || req.url.startsWith("/ui")) {
       return done();
     }

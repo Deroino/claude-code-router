@@ -66,6 +66,19 @@ export function SettingsDialog({ isOpen, onOpenChange }: SettingsDialogProps) {
         <div className="space-y-4 p-4 px-8 overflow-y-auto flex-1">
           <div className="flex items-center space-x-2">
             <Switch
+              id="noAuth"
+              checked={config.noAuth || false}
+              onCheckedChange={(checked) => setConfig({ ...config, noAuth: checked })}
+            />
+            <Label
+              htmlFor="noAuth"
+              className="transition-all-ease hover:scale-[1.02] cursor-pointer"
+            >
+              No Auth (Disable Authentication)
+            </Label>
+          </div>
+          <div className="flex items-center space-x-2">
+            <Switch
               id="log"
               checked={config.LOG}
               onCheckedChange={handleLogChange}
