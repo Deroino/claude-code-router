@@ -9,7 +9,7 @@ import { Save, X, RefreshCw } from 'lucide-react';
 interface JsonEditorProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  showToast?: (message: string, type: 'success' | 'error' | 'warning') => void;
+  showToast?: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => void;
 }
 
 export function JsonEditor({ open, onOpenChange, showToast }: JsonEditorProps) {

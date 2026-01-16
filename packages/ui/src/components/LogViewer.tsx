@@ -9,7 +9,7 @@ import { X, RefreshCw, Download, Trash2, ArrowLeft, File, Layers, Bug } from 'lu
 interface LogViewerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  showToast?: (message: string, type: 'success' | 'error' | 'warning') => void;
+  showToast?: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => void;
 }
 
 interface LogEntry {

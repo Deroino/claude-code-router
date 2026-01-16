@@ -33,7 +33,7 @@ interface ModelData {
 
 interface ProviderType extends Provider {}
 
-export function Providers({ showToast }: { showToast: (message: string, type: 'success' | 'error' | 'warning') => void }) {
+export function Providers({ showToast, removeToast }: { showToast: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => string; removeToast: (id: string) => void }) {
   const { t } = useTranslation();
   const { config, setConfig } = useConfig();
   const [editingProviderIndex, setEditingProviderIndex] = useState<number | null>(null);
@@ -723,6 +723,7 @@ export function Providers({ showToast }: { showToast: (message: string, type: 's
           onEdit={handleEditProvider}
           onRemove={handleSetDeletingProviderIndex}
           showToast={showToast}
+          removeToast={removeToast}
         />
       </CardContent>
 

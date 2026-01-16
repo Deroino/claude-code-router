@@ -53,7 +53,7 @@ function App() {
   }, [modelMonitorLogs, isModelMonitorOpen]);
 
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
+  const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'error' | 'warning'; duration?: number }[]>([]);
   // 版本检查状态
   const [isNewVersionAvailable, setIsNewVersionAvailable] = useState(false);
   const [isUpdateDialogOpen, setIsUpdateDialogOpen] = useState(false);
@@ -63,16 +63,28 @@ function App() {
   const [isUpdateFeatureAvailable, setIsUpdateFeatureAvailable] = useState(true);
   const hasAutoCheckedUpdate = useRef(false);
 
+  // Show toast function
+  const showToast = useCallback((message: string, type: 'success' | 'error' | 'warning', duration?: number) => {
+    const id = Date.now() + Math.random().toString(36).substring(2);
+    setToasts(prev => [...prev, { id, message, type, duration }]);
+    return id;
+  }, []);
+
+  // Remove toast function
+  const removeToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
   // Restart service - wait for pending auto-save to complete
   const restartService = async () => {
     if (!config) {
-      setToast({ message: t('app.config_missing'), type: 'error' });
+      showToast(t('app.config_missing'), 'error');
       return;
     }
 
     // Wait for pending auto-save to complete
     if (isSaving) {
-      setToast({ message: t('app.waiting_for_save'), type: 'warning' });
+      showToast(t('app.waiting_for_save'), 'warning');
       // Wait up to 5 seconds for save to complete
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
@@ -84,16 +96,16 @@ function App() {
       if (response && typeof response === 'object' && 'success' in response) {
         const apiResponse = response as { success: boolean; message?: string };
         if (apiResponse.success) {
-          setToast({ message: apiResponse.message || t('app.restart_success'), type: 'success' });
+          showToast(apiResponse.message || t('app.restart_success'), 'success');
         } else {
-          setToast({ message: apiResponse.message || t('app.restart_failed'), type: 'error' });
+          showToast(apiResponse.message || t('app.restart_failed'), 'error');
         }
       } else {
-        setToast({ message: t('app.restart_success'), type: 'success' });
+        showToast(t('app.restart_success'), 'success');
       }
     } catch (error) {
       console.error('Failed to restart service:', error);
-      setToast({ message: t('app.restart_failed') + ': ' + (error as Error).message, type: 'error' });
+      showToast(t('app.restart_failed') + ': ' + (error as Error).message, 'error');
     }
   };
   
@@ -123,7 +135,7 @@ function App() {
         }
       } else if (showDialog) {
         // 只有在showDialog为true时才显示没有更新的提示
-        setToast({ message: t('app.no_updates_available'), type: 'success' });
+        showToast(t('app.no_updates_available'), 'success');
       }
       
       setHasCheckedUpdate(true);
@@ -131,12 +143,12 @@ function App() {
       console.error('Failed to check for updates:', error);
       setIsUpdateFeatureAvailable(false);
       if (showDialog) {
-        setToast({ message: t('app.update_check_failed') + ': ' + (error as Error).message, type: 'error' });
+        showToast(t('app.update_check_failed') + ': ' + (error as Error).message, 'error');
       }
     } finally {
       setIsCheckingUpdate(false);
     }
-  }, [hasCheckedUpdate, isNewVersionAvailable, t]);
+  }, [hasCheckedUpdate, isNewVersionAvailable, t, showToast]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -198,21 +210,21 @@ function App() {
   // 执行更新函数
   const performUpdate = async () => {
     if (!newVersionInfo) return;
-    
+
     try {
       const result = await api.performUpdate();
-      
+
       if (result.success) {
-        setToast({ message: t('app.update_successful'), type: 'success' });
+        showToast(t('app.update_successful'), 'success');
         setIsNewVersionAvailable(false);
         setIsUpdateDialogOpen(false);
         setHasCheckedUpdate(false); // 重置检查状态，以便下次重新检查
       } else {
-        setToast({ message: t('app.update_failed') + ': ' + result.message, type: 'error' });
+        showToast(t('app.update_failed') + ': ' + result.message, 'error');
       }
     } catch (error) {
       console.error('Failed to perform update:', error);
-      setToast({ message: t('app.update_failed') + ': ' + (error as Error).message, type: 'error' });
+      showToast(t('app.update_failed') + ': ' + (error as Error).message, 'error');
     }
   };
 
@@ -361,7 +373,7 @@ function App() {
       </header>
       <main className="flex h-[calc(100vh-4rem)] gap-4 p-4 overflow-hidden">
         <div className="w-3/5">
-          <Providers showToast={(message, type) => setToast({ message, type })} />
+          <Providers showToast={showToast} removeToast={removeToast} />
         </div>
         <div className="flex w-2/5 flex-col gap-4">
           <div className="h-3/5">
@@ -373,15 +385,15 @@ function App() {
         </div>
       </main>
       <SettingsDialog isOpen={isSettingsOpen} onOpenChange={setIsSettingsOpen} />
-      <JsonEditor 
-        open={isJsonEditorOpen} 
-        onOpenChange={setIsJsonEditorOpen} 
-        showToast={(message, type) => setToast({ message, type })} 
+      <JsonEditor
+        open={isJsonEditorOpen}
+        onOpenChange={setIsJsonEditorOpen}
+        showToast={showToast}
       />
-      <LogViewer 
-        open={isLogViewerOpen} 
-        onOpenChange={setIsLogViewerOpen} 
-        showToast={(message, type) => setToast({ message, type })} 
+      <LogViewer
+        open={isLogViewerOpen}
+        onOpenChange={setIsLogViewerOpen}
+        showToast={showToast}
       />
       {/* 版本更新对话框 */}
       <Dialog open={isModelMonitorOpen} onOpenChange={setIsModelMonitorOpen}>
@@ -476,13 +488,17 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {toast && (
-        <Toast 
-          message={toast.message} 
-          type={toast.type} 
-          onClose={() => setToast(null)} 
-        />
-      )}
+      <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
+        {toasts.map(toast => (
+          <Toast
+            key={toast.id}
+            message={toast.message}
+            type={toast.type}
+            duration={toast.duration}
+            onClose={() => removeToast(toast.id)}
+          />
+        ))}
+      </div>
     </div>
     </TooltipProvider>
   );

@@ -8,10 +8,11 @@ interface ProviderListProps {
   providers: Provider[];
   onEdit: (index: number) => void;
   onRemove: (index: number) => void;
-  showToast: (message: string, type: 'success' | 'error' | 'warning') => void;
+  showToast: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => string;
+  removeToast: (id: string) => void;
 }
 
-export function ProviderList({ providers, onEdit, onRemove, showToast }: ProviderListProps) {
+export function ProviderList({ providers, onEdit, onRemove, showToast, removeToast }: ProviderListProps) {
   // Handle case where providers might be null or undefined
   if (!providers || !Array.isArray(providers)) {
     return (
@@ -89,17 +90,23 @@ export function ProviderList({ providers, onEdit, onRemove, showToast }: Provide
                         e.stopPropagation(); // 阻止触发 Badge 的复制事件
 
                         const textToTest = `${providerName},${model}`;
-                        showToast(`Testing ${textToTest}...`, 'warning');
+                        const toastId = showToast(`Testing ${textToTest}...`, 'warning', 0);
 
                         try {
                           const result = await api.testModel(providerName, model || "", "hello");
+                          // Remove the testing toast
+                          removeToast(toastId);
+
                           if (result?.success) {
                             showToast(`"${textToTest}" test OK`, 'success');
                           } else {
-                            showToast(`"${textToTest}" test failed`, 'error');
+                            showToast(`"${textToTest}" test failed`, 'error', 5000);
                           }
                         } catch (err) {
                           console.error('Model test failed: ', err);
+                          // Remove the testing toast
+                          removeToast(toastId);
+
                           let detail = 'Unknown error';
                           if (err && typeof err === 'object') {
                             const anyErr = err as { body?: string; message?: string };

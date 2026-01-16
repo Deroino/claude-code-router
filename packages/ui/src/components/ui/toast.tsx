@@ -4,17 +4,20 @@ import { CheckCircle, XCircle, AlertCircle, X } from 'lucide-react';
 interface ToastProps {
   message: string;
   type: 'success' | 'error' | 'warning';
+  duration?: number;
   onClose: () => void;
 }
 
-export function Toast({ message, type, onClose }: ToastProps) {
+export function Toast({ message, type, duration = 3000, onClose }: ToastProps) {
   useEffect(() => {
-    const timer = setTimeout(() => {
-      onClose();
-    }, 3000);
+    if (duration > 0) {
+      const timer = setTimeout(() => {
+        onClose();
+      }, duration);
 
-    return () => clearTimeout(timer);
-  }, [onClose]);
+      return () => clearTimeout(timer);
+    }
+  }, [onClose, duration]);
 
   const getIcon = () => {
     switch (type) {
@@ -43,7 +46,7 @@ export function Toast({ message, type, onClose }: ToastProps) {
   };
 
   return (
-    <div className={`fixed top-4 right-4 z-[100] flex items-center justify-between p-4 rounded-lg border shadow-lg ${getBackgroundColor()} transition-all duration-300 ease-in-out`}>
+    <div className={`pointer-events-auto flex items-center justify-between p-4 rounded-lg border shadow-lg ${getBackgroundColor()} transition-all duration-300 ease-in-out max-w-[80vw] md:max-w-lg break-words whitespace-normal`}>
       <div className="flex items-center space-x-2">
         {getIcon()}
         <span className="text-sm font-medium">{message}</span>
