@@ -471,7 +471,7 @@ function App() {
 
         {/* Right Column: Model Monitor */}
         {showModelMonitor && (
-          <div className="flex-1 min-w-0 animate-slide-in">
+          <div className="w-96 min-w-0 animate-slide-in shrink-0">
             <ModelMonitorPanel
               logs={modelMonitorLogs}
               status={modelMonitorStatus}
