@@ -18,8 +18,18 @@ import { X, Trash2, Plus, Eye, EyeOff, Search, XCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Combobox } from "@/components/ui/combobox";
 import { ComboInput } from "@/components/ui/combo-input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import type { Provider } from "@/types";
+
+// Model data from /v1/models endpoint
+interface ModelData {
+  id: string;
+  object: string;
+  created: number;
+  owned_by: string;
+}
 
 interface ProviderType extends Provider {}
 
@@ -40,6 +50,14 @@ export function Providers({ showToast }: { showToast: (message: string, type: 's
   const [nameError, setNameError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>("");
   const comboInputRef = useRef<HTMLInputElement>(null);
+
+  // Model fetching state
+  const [isFetchingModels, setIsFetchingModels] = useState<boolean>(false);
+  const [fetchedModels, setFetchedModels] = useState<ModelData[]>([]);
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
+  const [showModelSelectDialog, setShowModelSelectDialog] = useState<boolean>(false);
+  const [modelFetchError, setModelFetchError] = useState<string | null>(null);
+  const [modelSearchTerm, setModelSearchTerm] = useState<string>("");
 
   useEffect(() => {
     const fetchProviderTemplates = async () => {
@@ -486,12 +504,12 @@ export function Providers({ showToast }: { showToast: (message: string, type: 's
 
   const handleRemoveModel = (_providerIndex: number, modelIndex: number) => {
     if (!editingProviderData) return;
-    
+
     const updatedProvider = { ...editingProviderData };
-    
+
     // Handle case where provider.models might be null or undefined
     const models = Array.isArray(updatedProvider.models) ? [...updatedProvider.models] : [];
-    
+
     // Handle case where modelIndex might be out of bounds
     if (modelIndex >= 0 && modelIndex < models.length) {
       models.splice(modelIndex, 1);
@@ -499,6 +517,155 @@ export function Providers({ showToast }: { showToast: (message: string, type: 's
       setEditingProviderData(updatedProvider);
     }
   };
+
+  // Fetch models from provider's /v1/models endpoint
+  const handleFetchModels = async () => {
+    if (!editingProviderData) return;
+
+    const { api_base_url, api_key } = editingProviderData;
+
+    // Validate required fields
+    if (!api_base_url || !api_key) {
+      showToast("Please fill in API Base URL and API Key first", "error");
+      return;
+    }
+
+    setIsFetchingModels(true);
+    setModelFetchError(null);
+    setFetchedModels([]);
+    setSelectedModels(new Set());
+
+    try {
+      // Extract base URL and construct models endpoint
+      // Remove trailing slash
+      let baseUrl = api_base_url.replace(/\/$/, '');
+      // Remove /v1, /v1/messages, /v1/chat/completions, etc. to get the actual base URL
+      baseUrl = baseUrl.replace(/\/v1\/?.*$/, '');
+      // Construct models endpoint
+      const modelsUrl = `${baseUrl}/v1/models`;
+
+      // Get API key (handle array or string)
+      const apiKey = Array.isArray(api_key) ? api_key[0] || '' : api_key;
+
+      // Create timeout signal (5 seconds)
+      const timeoutController = new AbortController();
+      const timeoutId = setTimeout(() => timeoutController.abort(), 5000);
+
+      const response = await fetch(modelsUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        signal: timeoutController.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        // Try to read error response body
+        let errorDetail = response.statusText;
+        try {
+          const errorBody = await response.text();
+          if (errorBody) {
+            errorDetail = `${response.status} - ${errorBody}`;
+          }
+        } catch (e) {
+          // If we can't read the body, just use status
+        }
+        throw new Error(`HTTP ${response.status}: ${errorDetail}`);
+      }
+
+      const data = await response.json();
+
+      // Parse response - handle standard OpenAI format
+      if (data.object === 'list' && Array.isArray(data.data)) {
+        const models: ModelData[] = data.data;
+        setFetchedModels(models);
+
+        // Pre-select models that are already in the provider's model list
+        const existingModels = editingProviderData.models || [];
+        const preSelected = new Set<string>();
+        models.forEach(m => {
+          if (existingModels.includes(m.id)) {
+            preSelected.add(m.id);
+          }
+        });
+        setSelectedModels(preSelected);
+
+        // Open the selection dialog
+        setShowModelSelectDialog(true);
+      } else {
+        throw new Error("Invalid response format from /v1/models");
+      }
+    } catch (error: any) {
+      const errorMsg = error.message || "Failed to fetch models";
+      setModelFetchError(errorMsg);
+      showToast(`Failed to fetch models: ${errorMsg}`, "error");
+    } finally {
+      setIsFetchingModels(false);
+    }
+  };
+
+  // Handle model selection
+  const handleModelToggle = (modelId: string) => {
+    setSelectedModels(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(modelId)) {
+        newSet.delete(modelId);
+      } else {
+        newSet.add(modelId);
+      }
+      return newSet;
+    });
+  };
+
+  // Handle select all models
+  const handleSelectAll = () => {
+    if (selectedModels.size === fetchedModels.length) {
+      // Deselect all
+      setSelectedModels(new Set());
+    } else {
+      // Select all
+      setSelectedModels(new Set(fetchedModels.map(m => m.id)));
+    }
+  };
+
+  // Confirm model selection and add to provider
+  const handleConfirmModelSelection = () => {
+    if (!editingProviderData) return;
+
+    const existingModels = Array.isArray(editingProviderData.models) ? [...editingProviderData.models] : [];
+    const newModels = Array.from(selectedModels).filter(id => !existingModels.includes(id));
+
+    if (newModels.length > 0) {
+      const updatedProvider = { ...editingProviderData };
+      updatedProvider.models = [...existingModels, ...newModels];
+      setEditingProviderData(updatedProvider);
+      showToast(`Added ${newModels.length} model(s)`, "success");
+    }
+
+    setShowModelSelectDialog(false);
+    setFetchedModels([]);
+    setSelectedModels(new Set());
+  };
+
+  // Cancel model selection
+  const handleCancelModelSelection = () => {
+    setShowModelSelectDialog(false);
+    setFetchedModels([]);
+    setSelectedModels(new Set());
+    setModelFetchError(null);
+    setModelSearchTerm("");
+  };
+
+  // Filter models based on search term
+  const filteredModels = fetchedModels.filter(model => {
+    if (!modelSearchTerm) return true;
+    const term = modelSearchTerm.toLowerCase();
+    return model.id.toLowerCase().includes(term) ||
+           (model.owned_by && model.owned_by.toLowerCase().includes(term));
+  });
 
   const editingProvider = editingProviderData || (editingProviderIndex !== null ? validProviders[editingProviderIndex] : null);
 
@@ -710,9 +877,9 @@ export function Providers({ showToast }: { showToast: (message: string, type: 's
                           inputPlaceholder={t("providers.models_placeholder")}
                         />
                       ) : (
-                        <Input 
-                          id="models" 
-                          placeholder={t("providers.models_placeholder")} 
+                        <Input
+                          id="models"
+                          placeholder={t("providers.models_placeholder")}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' && e.currentTarget.value.trim() && editingProviderIndex !== null) {
                               handleAddModel(editingProviderIndex, e.currentTarget.value);
@@ -722,7 +889,7 @@ export function Providers({ showToast }: { showToast: (message: string, type: 's
                         />
                       )}
                     </div>
-                    <Button 
+                    <Button
                       onClick={() => {
                         if (hasFetchedModels[editingProviderIndex] && comboInputRef.current) {
                           // 使用ComboInput的逻辑
@@ -745,20 +912,28 @@ export function Providers({ showToast }: { showToast: (message: string, type: 's
                     >
                       {t("providers.add_model")}
                     </Button>
-                    {/* <Button 
-                      onClick={() => editingProvider && fetchAvailableModels(editingProvider)}
-                      disabled={isFetchingModels}
-                      variant="outline"
-                    >
-                      {isFetchingModels ? t("providers.fetching_models") : t("providers.fetch_available_models")}
-                    </Button> */}
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            onClick={handleFetchModels}
+                            disabled={isFetchingModels}
+                          >
+                            {isFetchingModels ? "..." : "从端点获取"}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>从 /v1/models 获取可用模型列表</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
                   <div className="flex flex-wrap gap-2 pt-2">
                     {(editingProvider.models || []).map((model: string, modelIndex: number) => (
                       <Badge key={modelIndex} variant="outline" className="font-normal flex items-center gap-1">
                         {model}
-                        <button 
-                          type="button" 
+                        <button
+                          type="button"
                           className="ml-1 rounded-full hover:bg-gray-200"
                           onClick={() => editingProviderIndex !== null && handleRemoveModel(editingProviderIndex, modelIndex)}
                         >
@@ -1106,6 +1281,85 @@ export function Providers({ showToast }: { showToast: (message: string, type: 's
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeletingProviderIndex(null)}>{t("providers.cancel")}</Button>
             <Button variant="destructive" onClick={() => deletingProviderIndex !== null && handleRemoveProvider(deletingProviderIndex)}>{t("providers.delete")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Model Selection Dialog */}
+      <Dialog open={showModelSelectDialog} onOpenChange={handleCancelModelSelection}>
+        <DialogContent className="max-h-[80vh] flex flex-col sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>选择模型</DialogTitle>
+            <DialogDescription>
+              从端点获取的可用模型列表，勾选要添加的模型
+            </DialogDescription>
+          </DialogHeader>
+          {modelFetchError ? (
+            <div className="p-4 bg-red-50 border border-red-200 rounded-md">
+              <p className="text-red-600">{modelFetchError}</p>
+            </div>
+          ) : (
+            <div className="flex-grow overflow-y-auto">
+              <div className="mb-4 flex items-center gap-2 border-b pb-4">
+                <div className="relative flex-1">
+                  <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
+                  <Input
+                    placeholder="搜索模型..."
+                    value={modelSearchTerm}
+                    onChange={(e) => setModelSearchTerm(e.target.value)}
+                    className="pl-8"
+                  />
+                </div>
+                {modelSearchTerm && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setModelSearchTerm("")}
+                  >
+                    <XCircle className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+              <div className="mb-4 flex items-center gap-4 border-b pb-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={selectedModels.size === fetchedModels.length && fetchedModels.length > 0}
+                    onCheckedChange={handleSelectAll}
+                  />
+                  <span className="text-sm">全选</span>
+                </label>
+                <span className="text-sm text-gray-500">
+                  已选择 {selectedModels.size} / {filteredModels.length} 个模型
+                </span>
+              </div>
+              <div className="space-y-1">
+                {filteredModels.map((model) => (
+                  <label
+                    key={model.id}
+                    className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-md cursor-pointer border-b last:border-b-0"
+                  >
+                    <Checkbox
+                      checked={selectedModels.has(model.id)}
+                      onCheckedChange={() => handleModelToggle(model.id)}
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium">{model.id}</div>
+                      {model.owned_by && (
+                        <div className="text-xs text-gray-500">{model.owned_by}</div>
+                      )}
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={handleCancelModelSelection}>
+              取消
+            </Button>
+            <Button onClick={handleConfirmModelSelection} disabled={selectedModels.size === 0}>
+              确认添加 ({selectedModels.size})
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
