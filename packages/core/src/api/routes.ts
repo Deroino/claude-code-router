@@ -333,9 +333,13 @@ async function sendRequestToProvider(
   }
 
   // Send HTTP request
-  // Prepare headers
+  // Prepare headers - get API key with rotation support
+  const selectedApiKey = typeof provider.apiKey === 'string'
+    ? provider.apiKey
+    : fastify.providerService.getApiKey(provider.name, provider.apiKey);
+
   const requestHeaders: Record<string, string> = {
-    Authorization: `Bearer ${provider.apiKey}`,
+    Authorization: `Bearer ${selectedApiKey}`,
     ...(config?.headers || {}),
   };
 

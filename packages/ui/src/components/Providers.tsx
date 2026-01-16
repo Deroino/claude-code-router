@@ -35,7 +35,7 @@ export function Providers({ showToast }: { showToast: (message: string, type: 's
   const [editingProviderData, setEditingProviderData] = useState<ProviderType | null>(null);
   const [isNewProvider, setIsNewProvider] = useState<boolean>(false);
   const [providerTemplates, setProviderTemplates] = useState<ProviderType[]>([]);
-  const [showApiKey, setShowApiKey] = useState<Record<number, boolean>>({});
+  const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({});
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -145,8 +145,12 @@ export function Providers({ showToast }: { showToast: (message: string, type: 's
       return;
     }
     
-    // Validate API key
-    if (!editingProviderData.api_key || editingProviderData.api_key.trim() === '') {
+    // Validate API key - support single string or array
+    const apiKeys = Array.isArray(editingProviderData.api_key)
+      ? editingProviderData.api_key
+      : [editingProviderData.api_key];
+
+    if (!apiKeys.some(k => k && k.trim() !== '')) {
       setApiKeyError(t("providers.api_key_required"));
       return;
     }
@@ -214,7 +218,7 @@ export function Providers({ showToast }: { showToast: (message: string, type: 's
     setDeletingProviderIndex(null);
   };
 
-  const handleProviderChange = (_index: number, field: string, value: string) => {
+  const handleProviderChange = (_index: number, field: string, value: string | string[]) => {
     if (editingProviderData) {
       const updatedProvider = { ...editingProviderData, [field]: value };
       setEditingProviderData(updatedProvider);
@@ -603,32 +607,82 @@ export function Providers({ showToast }: { showToast: (message: string, type: 's
               </div>
               <div className="space-y-2">
                 <Label htmlFor="api_key">{t("providers.api_key")}</Label>
-                <div className="relative">
-                  <Input 
-                    id="api_key" 
-                    type={showApiKey[editingProviderIndex || 0] ? "text" : "password"} 
-                    value={editingProvider.api_key || ''} 
-                    onChange={(e) => handleProviderChange(editingProviderIndex, 'api_key', e.target.value)} 
-                    className={apiKeyError ? "border-red-500" : ""}
-                  />
+                <div className="space-y-2">
+                  {(() => {
+                    const apiKeys = Array.isArray(editingProvider.api_key)
+                      ? editingProvider.api_key
+                      : [editingProvider.api_key || ''];
+
+                    return apiKeys.map((key, keyIndex) => (
+                      <div key={keyIndex} className="relative">
+                        <Input
+                          id={`api_key_${keyIndex}`}
+                          type={showApiKey[`${editingProviderIndex}_${keyIndex}`] ? "text" : "password"}
+                          value={key || ''}
+                          onChange={(e) => {
+                            const newKeys = [...apiKeys];
+                            newKeys[keyIndex] = e.target.value;
+                            // If only one key and it's the same as the original, keep as string
+                            if (newKeys.length === 1 && !Array.isArray(editingProvider.api_key)) {
+                              handleProviderChange(editingProviderIndex, 'api_key', e.target.value);
+                            } else {
+                              handleProviderChange(editingProviderIndex, 'api_key', newKeys);
+                            }
+                          }}
+                          className={apiKeyError ? "border-red-500" : ""}
+                        />
+                        <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-1">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => {
+                              const index = `${editingProviderIndex}_${keyIndex}`;
+                              setShowApiKey(prev => ({
+                                ...prev,
+                                [index]: !prev[index]
+                              }));
+                            }}
+                          >
+                            {showApiKey[`${editingProviderIndex}_${keyIndex}`] ? (
+                              <EyeOff className="h-4 w-4" />
+                            ) : (
+                              <Eye className="h-4 w-4" />
+                            )}
+                          </Button>
+                          {apiKeys.length > 1 && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => {
+                                const newKeys = apiKeys.filter((_, i) => i !== keyIndex);
+                                handleProviderChange(editingProviderIndex, 'api_key', newKeys.length === 1 ? newKeys[0] : newKeys);
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ));
+                  })()}
                   <Button
                     type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="absolute right-2 top-1/2 transform -translate-y-1/2 h-8 w-8"
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
                     onClick={() => {
-                      const index = editingProviderIndex || 0;
-                      setShowApiKey(prev => ({
-                        ...prev,
-                        [index]: !prev[index]
-                      }));
+                      const apiKeys = Array.isArray(editingProvider.api_key)
+                        ? [...editingProvider.api_key, '']
+                        : [editingProvider.api_key || '', ''];
+                      handleProviderChange(editingProviderIndex, 'api_key', apiKeys);
                     }}
                   >
-                    {showApiKey[editingProviderIndex || 0] ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
+                    <Plus className="h-4 w-4 mr-2" />
+                    {t("providers.add_api_key")}
                   </Button>
                 </div>
                 {apiKeyError && (

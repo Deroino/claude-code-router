@@ -12,6 +12,8 @@ import { TransformerService } from "./transformer";
 export class ProviderService {
   private providers: Map<string, LLMProvider> = new Map();
   private modelRoutes: Map<string, ModelRoute> = new Map();
+  // Track rotation index for round-robin API key selection
+  private apiKeyRotationIndex: Map<string, number> = new Map();
 
   constructor(private readonly configService: ConfigService, private readonly transformerService: TransformerService, private readonly logger: any) {
     this.initializeCustomProviders();
@@ -29,10 +31,15 @@ export class ProviderService {
   private initializeFromProvidersArray(providersConfig: ConfigProvider[]) {
     providersConfig.forEach((providerConfig: ConfigProvider) => {
       try {
+        // Support array of API keys - validate at least one key exists
+        const keys = Array.isArray(providerConfig.api_key)
+          ? providerConfig.api_key
+          : [providerConfig.api_key];
+
         if (
           !providerConfig.name ||
           !providerConfig.api_base_url ||
-          !providerConfig.api_key
+          !keys.some(k => k)
         ) {
           return;
         }
@@ -225,6 +232,25 @@ export class ProviderService {
 
   getModelRoutes(): ModelRoute[] {
     return Array.from(this.modelRoutes.values());
+  }
+
+  /**
+   * Get API key with round-robin rotation
+   * Supports single string or array of keys
+   */
+  getApiKey(providerName: string, apiKey: string | string[]): string {
+    if (typeof apiKey === 'string') {
+      return apiKey;
+    }
+
+    // Get or initialize rotation index
+    let index = this.apiKeyRotationIndex.get(providerName) || 0;
+    const selectedKey = apiKey[index % apiKey.length];
+
+    // Increment index for next request
+    this.apiKeyRotationIndex.set(providerName, index + 1);
+
+    return selectedKey;
   }
 
   private parseTransformerConfig(transformerConfig: any): any {

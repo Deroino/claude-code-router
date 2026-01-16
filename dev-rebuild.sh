@@ -22,7 +22,7 @@ echo "✅ 依赖安装完成"
 
 # 3. 构建项目
 echo "🔨 构建项目..."
-npm run build
+pnpm build
 echo "✅ 项目构建完成"
 
 # 4. 全局安装 CLI

@@ -200,7 +200,7 @@ export interface ConversionOptions {
 export interface LLMProvider {
   name: string;
   baseUrl: string;
-  apiKey: string;
+  apiKey: string | string[];
   models: string[];
   transformer?: {
     [key: string]: {
@@ -228,7 +228,7 @@ export interface RequestRouteInfo {
 export interface ConfigProvider {
   name: string;
   api_base_url: string;
-  api_key: string;
+  api_key: string | string[];
   models: string[];
   transformer: {
     use?: string[] | Array<any>[];

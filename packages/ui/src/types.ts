@@ -6,7 +6,7 @@ export interface ProviderTransformer {
 export interface Provider {
   name: string;
   api_base_url: string;
-  api_key: string;
+  api_key: string | string[];
   models: string[];
   transformer?: ProviderTransformer;
 }

@@ -175,11 +175,16 @@ export const createServer = async (config: any): Promise<any> => {
       }
 
       // Send request to provider
+      // Get API key with rotation support
+      const selectedApiKey = typeof providerData.apiKey === 'string'
+        ? providerData.apiKey
+        : providerService.getApiKey(providerData.name, providerData.apiKey);
+
       const response = await fetch(providerData.baseUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${providerData.apiKey}`
+          "Authorization": `Bearer ${selectedApiKey}`
         },
         body: JSON.stringify(processedRequest)
       });

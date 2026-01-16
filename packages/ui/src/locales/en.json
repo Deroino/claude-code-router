@@ -105,7 +105,8 @@
     "api_key_required": "API Key is required",
     "name_required": "Name is required",
     "name_duplicate": "A provider with this name already exists",
-    "search": "Search providers..."
+    "search": "Search providers...",
+    "add_api_key": "Add API Key"
 
   },
   "router": {

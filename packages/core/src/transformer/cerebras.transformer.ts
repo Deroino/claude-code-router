@@ -26,12 +26,15 @@ export class CerebrasTransformer implements Transformer {
     } else {
       transformedRequest.disable_reasoning = false
     }
-    
+
+    // Handle API key rotation - if array, use first key (rotation handled by caller)
+    const apiKey = Array.isArray(provider.apiKey) ? provider.apiKey[0] : provider.apiKey;
+
     return {
       body: transformedRequest,
       config: {
         headers: {
-          'Authorization': `Bearer ${provider.apiKey}`,
+          'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json'
         }
       }
