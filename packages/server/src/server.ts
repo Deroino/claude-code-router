@@ -207,14 +207,21 @@ export const createServer = async (config: any): Promise<any> => {
         ? providerData.apiKey
         : providerService.getApiKey(providerData.name, providerData.apiKey);
 
+      // Create AbortController for timeout
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000); // 10 seconds timeout
+
       const response = await fetch(providerData.baseUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${selectedApiKey}`
         },
-        body: JSON.stringify(processedRequest)
+        body: JSON.stringify(processedRequest),
+        signal: controller.signal
       });
+
+      clearTimeout(timeout);
 
       if (response.ok) {
         const data = await response.json();
@@ -243,6 +250,15 @@ export const createServer = async (config: any): Promise<any> => {
         return;
       }
     } catch (error: any) {
+      // Handle timeout error
+      if (error.name === 'AbortError') {
+        reply.status(504).send({
+          success: false,
+          error: "Request timeout (10 seconds)"
+        });
+        return;
+      }
+
       reply.status(500).send({
         success: false,
         error: error.message || "Unknown error occurred"
