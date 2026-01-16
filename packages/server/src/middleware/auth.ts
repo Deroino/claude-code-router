@@ -9,7 +9,7 @@ export const apiKeyAuth =
     }
 
     // Public endpoints that don't require authentication
-    const publicPaths = ["/", "/health", "/api/logs/stream", "/api/model-test"];
+    const publicPaths = ["/", "/health", "/api/logs/stream", "/api/model-test", "/api/config/stream"];
     if (publicPaths.includes(req.url) || req.url.startsWith("/ui")) {
       return done();
     }

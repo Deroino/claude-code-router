@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import type { ReactNode, Dispatch, SetStateAction } from 'react';
 import { api } from '@/lib/api';
 import type { Config, StatusLineConfig } from '@/types';
@@ -7,6 +7,7 @@ interface ConfigContextType {
   config: Config | null;
   setConfig: Dispatch<SetStateAction<Config | null>>;
   error: Error | null;
+  isSaving: boolean;
 }
 
 const ConfigContext = createContext<ConfigContextType | undefined>(undefined);
@@ -29,6 +30,12 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
   const [error, setError] = useState<Error | null>(null);
   const [hasFetched, setHasFetched] = useState<boolean>(false);
   const [apiKey, setApiKey] = useState<string | null>(localStorage.getItem('apiKey'));
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+
+  // Refs for auto-save and external update tracking
+  const isExternalUpdateRef = useRef<boolean>(false);
+  const pendingSaveRef = useRef<NodeJS.Timeout | null>(null);
+  const lastServerConfigRef = useRef<Config | null>(null);
 
   // Listen for localStorage changes
   useEffect(() => {
@@ -151,8 +158,69 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
     fetchConfig();
   }, [hasFetched, apiKey]);
 
+  // Auto-save with debounce (2 seconds)
+  useEffect(() => {
+    if (!config || isExternalUpdateRef.current) {
+      isExternalUpdateRef.current = false;
+      return;
+    }
+
+    // Clear previous pending save
+    if (pendingSaveRef.current) {
+      clearTimeout(pendingSaveRef.current);
+    }
+
+    setIsSaving(true);
+
+    // Debounce save by 2 seconds
+    pendingSaveRef.current = setTimeout(async () => {
+      try {
+        await api.updateConfig(config);
+        lastServerConfigRef.current = config;
+      } catch (error) {
+        console.error('Auto-save failed:', error);
+      } finally {
+        setIsSaving(false);
+      }
+    }, 2000);
+
+    return () => {
+      if (pendingSaveRef.current) {
+        clearTimeout(pendingSaveRef.current);
+        setIsSaving(false);
+      }
+    };
+  }, [config]);
+
+  // SSE listener for external config updates
+  useEffect(() => {
+    const eventSource = new EventSource('/api/config/stream');
+
+    eventSource.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === 'config_update') {
+          isExternalUpdateRef.current = true;
+          setConfig(message.data);
+          lastServerConfigRef.current = message.data;
+        }
+      } catch (error) {
+        console.error('Failed to parse SSE message:', error);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error('SSE connection error:', error);
+      // EventSource has built-in auto-reconnect, just log the error
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, []);
+
   return (
-    <ConfigContext.Provider value={{ config, setConfig, error }}>
+    <ConfigContext.Provider value={{ config, setConfig, error, isSaving }}>
       {children}
     </ConfigContext.Provider>
   );

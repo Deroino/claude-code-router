@@ -32,7 +32,7 @@ import "@/styles/animations.css";
 function App() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const { config, error } = useConfig();
+  const { config, error, isSaving } = useConfig();
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isJsonEditorOpen, setIsJsonEditorOpen] = useState(false);
   const [isLogViewerOpen, setIsLogViewerOpen] = useState(false);
@@ -63,82 +63,37 @@ function App() {
   const [isUpdateFeatureAvailable, setIsUpdateFeatureAvailable] = useState(true);
   const hasAutoCheckedUpdate = useRef(false);
 
-  const saveConfig = async () => {
-    // Handle case where config might be null or undefined
+  // Restart service - wait for pending auto-save to complete
+  const restartService = async () => {
     if (!config) {
       setToast({ message: t('app.config_missing'), type: 'error' });
       return;
     }
-    
+
+    // Wait for pending auto-save to complete
+    if (isSaving) {
+      setToast({ message: t('app.waiting_for_save'), type: 'warning' });
+      // Wait up to 5 seconds for save to complete
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+
     try {
-      // Save to API
-      const response = await api.updateConfig(config);
-      // Show success message or handle as needed
-      console.log('Config saved successfully');
-      
-      // 根据响应信息进行提示
+      const response = await api.restartService();
+      console.log('Service restarted successfully');
+
       if (response && typeof response === 'object' && 'success' in response) {
         const apiResponse = response as { success: boolean; message?: string };
         if (apiResponse.success) {
-          setToast({ message: apiResponse.message || t('app.config_saved_success'), type: 'success' });
+          setToast({ message: apiResponse.message || t('app.restart_success'), type: 'success' });
         } else {
-          setToast({ message: apiResponse.message || t('app.config_saved_failed'), type: 'error' });
+          setToast({ message: apiResponse.message || t('app.restart_failed'), type: 'error' });
         }
       } else {
-        // 默认成功提示
-        setToast({ message: t('app.config_saved_success'), type: 'success' });
+        setToast({ message: t('app.restart_success'), type: 'success' });
       }
     } catch (error) {
-      console.error('Failed to save config:', error);
-      // Handle error appropriately
-      setToast({ message: t('app.config_saved_failed') + ': ' + (error as Error).message, type: 'error' });
-    }
-  };
-
-  const saveConfigAndRestart = async () => {
-    // Handle case where config might be null or undefined
-    if (!config) {
-      setToast({ message: t('app.config_missing'), type: 'error' });
-      return;
-    }
-    
-    try {
-      // Save to API
-      const response = await api.updateConfig(config);
-      
-      // Check if save was successful before restarting
-      let saveSuccessful = true;
-      if (response && typeof response === 'object' && 'success' in response) {
-        const apiResponse = response as { success: boolean; message?: string };
-        if (!apiResponse.success) {
-          saveSuccessful = false;
-          setToast({ message: apiResponse.message || t('app.config_saved_failed'), type: 'error' });
-        }
-      }
-      
-      // Only restart if save was successful
-      if (saveSuccessful) {
-        // Restart service
-        const response = await api.restartService();
-        
-        // Show success message or handle as needed
-        console.log('Config saved and service restarted successfully');
-        
-        // 根据响应信息进行提示
-        if (response && typeof response === 'object' && 'success' in response) {
-          const apiResponse = response as { success: boolean; message?: string };
-          if (apiResponse.success) {
-            setToast({ message: apiResponse.message || t('app.config_saved_restart_success'), type: 'success' });
-          }
-        } else {
-          // 默认成功提示
-          setToast({ message: t('app.config_saved_restart_success'), type: 'success' });
-        }
-      }
-    } catch (error) {
-      console.error('Failed to save config and restart:', error);
-      // Handle error appropriately
-      setToast({ message: t('app.config_saved_restart_failed') + ': ' + (error as Error).message, type: 'error' });
+      console.error('Failed to restart service:', error);
+      setToast({ message: t('app.restart_failed') + ': ' + (error as Error).message, type: 'error' });
     }
   };
   
@@ -397,13 +352,10 @@ function App() {
               </TooltipContent>
             </Tooltip>
           )}
-          <Button onClick={saveConfig} variant="outline" className="transition-all-ease hover:scale-[1.02] active:scale-[0.98]">
-            <Save className="mr-2 h-4 w-4" />
-            {t('app.save')}
-          </Button>
-          <Button onClick={saveConfigAndRestart} className="transition-all-ease hover:scale-[1.02] active:scale-[0.98]">
-            <RefreshCw className="mr-2 h-4 w-4" />
-            {t('app.save_and_restart')}
+          {/* Removed Save button - config is auto-saved */}
+          <Button onClick={restartService} className="transition-all-ease hover:scale-[1.02] active:scale-[0.98]">
+            <RefreshCw className={`mr-2 h-4 w-4 ${isSaving ? 'animate-spin' : ''}`} />
+            {t('app.restart')}
           </Button>
         </div>
       </header>

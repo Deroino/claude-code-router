@@ -1,10 +1,10 @@
 import Server, { calculateTokenCount, TokenizerService } from "@musistudio/llms";
 import { readConfigFile, writeConfigFile, backupConfigFile } from "./utils";
+import { CONFIG_FILE } from "@CCR/shared";
 import { join } from "path";
 import fastifyStatic from "@fastify/static";
 import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, rmSync, watch, openSync, readSync, closeSync } from "fs";
 import { homedir } from "os";
-import { ReadableStream } from "stream/web";
 import {
   getPresetDir,
   readManifestFromDir,
@@ -29,6 +29,27 @@ import AdmZip from "adm-zip";
 export const createServer = async (config: any): Promise<any> => {
   const server = new Server(config);
   const app = server.app;
+
+  // Track SSE clients for config broadcasting
+  const sseClients = new Set<any>();
+  let configWatcher: any = null;
+
+  // Broadcast config change to all connected clients
+  const broadcastConfigChange = (configData: any) => {
+    const event = {
+      type: 'config_update',
+      data: configData,
+      timestamp: Date.now()
+    };
+    sseClients.forEach(res => {
+      try {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      } catch (e) {
+        // Client disconnected, remove from set
+        sseClients.delete(res);
+      }
+    });
+  };
 
   app.register(fastifyMultipart, {
     limits: {
@@ -110,8 +131,14 @@ export const createServer = async (config: any): Promise<any> => {
       console.log(`Backed up existing configuration file to ${backupPath}`);
     }
 
-    await writeConfigFile(newConfig);
-    return { success: true, message: "Config saved successfully" };
+    // Add lastModified timestamp
+    const configWithTimestamp = {
+      ...newConfig,
+      _lastModified: Date.now()
+    };
+
+    await writeConfigFile(configWithTimestamp);
+    return { success: true, message: "Config saved successfully", lastModified: configWithTimestamp._lastModified };
   });
 
   // Add endpoint to test a specific provider+model
@@ -782,6 +809,83 @@ export const createServer = async (config: any): Promise<any> => {
 
     const manifest = JSON.parse(entry.getData().toString('utf-8')) as ManifestFile;
     return manifestToPresetFile(manifest);
+  }
+
+  // SSE config streaming endpoint
+  app.get("/api/config/stream", async (req: any, reply: any) => {
+    // Set SSE headers
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.setHeader("Access-Control-Allow-Origin", "*");
+    reply.raw.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
+
+    const res = reply.raw;
+    let heartbeatInterval: NodeJS.Timeout | null = null;
+
+    // Send data function
+    const send = (data: string) => {
+      try {
+        res.write(data);
+      } catch (e) {
+        // Client disconnected, cleanup
+        cleanup();
+      }
+    };
+
+    // Cleanup function
+    const cleanup = () => {
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      sseClients.delete(res);
+      try {
+        res.end();
+      } catch (e) {}
+    };
+
+    // Add client to broadcast set
+    sseClients.add(res);
+
+    // Handle connection close
+    req.raw.on('close', cleanup);
+    req.raw.on('error', cleanup);
+
+    // Start the response
+    reply.raw.writeHead(200);
+
+    // Send current config immediately
+    readConfigFile().then(currentConfig => {
+      send(`data: ${JSON.stringify({
+        type: 'config_update',
+        data: currentConfig,
+        timestamp: Date.now()
+      })}\n\n`);
+    }).catch(err => {
+      console.error('Error reading config for SSE:', err);
+    });
+
+    // Send heartbeat every 30 seconds to keep connection alive
+    heartbeatInterval = setInterval(() => {
+      send(': heartbeat\n\n');
+    }, 30000);
+
+    // Return a promise that never resolves to keep the connection open
+    return new Promise(() => {});
+  });
+
+  // Watch config file for external changes
+  try {
+    configWatcher = watch(CONFIG_FILE, { persistent: true }, async (eventType) => {
+      if (eventType === 'change') {
+        try {
+          const newConfig = await readConfigFile();
+          broadcastConfigChange(newConfig);
+        } catch (err) {
+          console.error('Error reading config file change:', err);
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Error setting up config file watcher:', err);
   }
 
   return server;
