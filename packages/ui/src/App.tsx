@@ -7,11 +7,25 @@ import { Providers } from "@/components/Providers";
 import { Router } from "@/components/Router";
 import { JsonEditor } from "@/components/JsonEditor";
 import { LogViewer } from "@/components/LogViewer";
+import { ModelMonitorPanel } from "@/components/ModelMonitorPanel";
 import { Button } from "@/components/ui/button";
 import { useConfig } from "@/components/ConfigProvider";
 import { api } from "@/lib/api";
 import { useModelMonitorLogs } from "@/hooks/useModelMonitorLogs";
-import { Settings, Languages, Save, RefreshCw, FileJson, CircleArrowUp, FileText, FileCog, Activity } from "lucide-react";
+import {
+  Settings,
+  Languages,
+  RefreshCw,
+  FileJson,
+  CircleArrowUp,
+  FileText,
+  FileCog,
+  Activity,
+  Server,
+  Route,
+  Workflow,
+  LayoutDashboard
+} from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -33,24 +47,23 @@ function App() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const { config, error, isSaving } = useConfig();
+
+  // Dialog states
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isJsonEditorOpen, setIsJsonEditorOpen] = useState(false);
   const [isLogViewerOpen, setIsLogViewerOpen] = useState(false);
-  const [isModelMonitorOpen, setIsModelMonitorOpen] = useState(false);
 
+  // Panel visibility states
+  const [showProviders, setShowProviders] = useState(true);
+  const [showRouter, setShowRouter] = useState(true);
+  const [showTransformers, setShowTransformers] = useState(true);
+  const [showModelMonitor, setShowModelMonitor] = useState(false);
+
+  // Model Monitor Data - Always keep SSE connection alive, regardless of panel visibility
   const { logs: modelMonitorLogs, currentFile: modelMonitorFile, status: modelMonitorStatus } = useModelMonitorLogs({
-    isOpen: isModelMonitorOpen,
+    isOpen: true,
     maxItems: 50
   });
-
-  const modelMonitorEndRef = useRef<HTMLDivElement>(null);
-
-  // Auto-scroll to bottom when logs update
-  useEffect(() => {
-    if (isModelMonitorOpen && modelMonitorEndRef.current) {
-      modelMonitorEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [modelMonitorLogs, isModelMonitorOpen]);
 
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'error' | 'warning'; duration?: number }[]>([]);
@@ -257,8 +270,79 @@ function App() {
   return (
     <TooltipProvider>
       <div className="h-screen bg-gray-50 font-sans">
-      <header className="flex h-16 items-center justify-between border-b bg-white px-6">
-        <h1 className="text-xl font-semibold text-gray-800">{t('app.title')}</h1>
+      <header className="flex h-16 items-center justify-between border-b bg-white px-4">
+        {/* Left side - Panel Toggles */}
+        <div className="flex items-center gap-2">
+          <h1 className="text-lg font-semibold text-gray-800 mr-4">{t('app.title')}</h1>
+          <div className="flex items-center gap-1 border-r pr-4 mr-2">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={showProviders ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setShowProviders(!showProviders)}
+                  className="transition-all-ease hover:scale-[1.02]"
+                >
+                  <Server className="h-4 w-4 mr-1.5" />
+                  Providers
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Toggle Providers Panel</p>
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={showRouter ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setShowRouter(!showRouter)}
+                  className="transition-all-ease hover:scale-[1.02]"
+                >
+                  <Route className="h-4 w-4 mr-1.5" />
+                  Router
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Toggle Router Panel</p>
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={showTransformers ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setShowTransformers(!showTransformers)}
+                  className="transition-all-ease hover:scale-[1.02]"
+                >
+                  <Workflow className="h-4 w-4 mr-1.5" />
+                  Transformers
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Toggle Transformers Panel</p>
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={showModelMonitor ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setShowModelMonitor(!showModelMonitor)}
+                  className="transition-all-ease hover:scale-[1.02]"
+                >
+                  <Activity className="h-4 w-4 mr-1.5" />
+                  Monitor
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Toggle Model Monitor Panel</p>
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+
+        {/* Right side - System Controls */}
         <div className="flex items-center gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -268,16 +352,6 @@ function App() {
             </TooltipTrigger>
             <TooltipContent>
               <p>{t('app.settings')}</p>
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={() => setIsModelMonitorOpen(true)} className="transition-all-ease hover:scale-110">
-                <Activity className="h-5 w-5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Model Monitor</p>
             </TooltipContent>
           </Tooltip>
           <Tooltip>
@@ -364,25 +438,48 @@ function App() {
               </TooltipContent>
             </Tooltip>
           )}
-          {/* Removed Save button - config is auto-saved */}
           <Button onClick={restartService} className="transition-all-ease hover:scale-[1.02] active:scale-[0.98]">
             <RefreshCw className={`mr-2 h-4 w-4 ${isSaving ? 'animate-spin' : ''}`} />
             {t('app.restart')}
           </Button>
         </div>
       </header>
+
       <main className="flex h-[calc(100vh-4rem)] gap-4 p-4 overflow-hidden">
-        <div className="w-3/5">
-          <Providers showToast={showToast} removeToast={removeToast} />
-        </div>
-        <div className="flex w-2/5 flex-col gap-4">
-          <div className="h-3/5">
-            <Router />
+        {/* Left Column: Providers */}
+        {showProviders && (
+          <div className="flex-1 min-w-0 animate-slide-in">
+            <Providers showToast={showToast} removeToast={removeToast} />
           </div>
-          <div className="flex-1 overflow-hidden">
-            <Transformers />
+        )}
+
+        {/* Middle Column: Router + Transformers */}
+        {(showRouter || showTransformers) && (
+          <div className="flex flex-1 flex-col gap-4 min-w-0 animate-slide-in">
+            {showRouter && (
+              <div className="flex-1 min-h-0">
+                <Router />
+              </div>
+            )}
+            {showTransformers && (
+              <div className="flex-1 min-h-0">
+                <Transformers />
+              </div>
+            )}
           </div>
-        </div>
+        )}
+
+        {/* Right Column: Model Monitor */}
+        {showModelMonitor && (
+          <div className="flex-1 min-w-0 animate-slide-in">
+            <ModelMonitorPanel
+              logs={modelMonitorLogs}
+              status={modelMonitorStatus}
+              currentFile={modelMonitorFile}
+              onClose={() => setShowModelMonitor(false)}
+            />
+          </div>
+        )}
       </main>
       <SettingsDialog isOpen={isSettingsOpen} onOpenChange={setIsSettingsOpen} />
       <JsonEditor
@@ -395,60 +492,6 @@ function App() {
         onOpenChange={setIsLogViewerOpen}
         showToast={showToast}
       />
-      {/* 版本更新对话框 */}
-      <Dialog open={isModelMonitorOpen} onOpenChange={setIsModelMonitorOpen}>
-        <DialogContent className="max-w-4xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              Model Monitor
-              {modelMonitorStatus === 'connecting' && (
-                <span className="text-xs font-normal text-muted-foreground">(Connecting...)</span>
-              )}
-              {modelMonitorFile && (
-                <span className="text-xs font-normal text-muted-foreground truncate max-w-[200px]" title={modelMonitorFile}>
-                  ({modelMonitorFile})
-                </span>
-              )}
-            </DialogTitle>
-            <DialogDescription>
-              Live view of request routing targets (auto-follows new log files)
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[60vh] overflow-y-auto py-4 text-sm font-mono">
-            <div className="space-y-1">
-              {modelMonitorLogs.length === 0 ? (
-                <div className="text-muted-foreground text-center py-8">Waiting for requests...</div>
-              ) : (
-                modelMonitorLogs.map((log) => (
-                  <div key={log.id} className="rounded-sm border bg-muted/30 px-3 py-1.5 hover:bg-muted/50 transition-colors">
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground mb-0.5">
-                      <span>{log.timestamp}</span>
-                      {log.reqId && <span>[{log.reqId}]</span>}
-                    </div>
-                    <div className="break-all">
-                      {log.model ? (
-                        <>
-                          <span className="font-semibold text-primary">[{log.scenarioLabel || '普通任务'}] </span>
-                          <span className="font-medium">{log.model}</span>
-                          {log.provider && <span className="text-muted-foreground ml-2">({log.provider})</span>}
-                        </>
-                      ) : (
-                        <span className="text-muted-foreground">{log.raw}</span>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-              <div ref={modelMonitorEndRef} />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsModelMonitorOpen(false)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       <Dialog open={isUpdateDialogOpen} onOpenChange={setIsUpdateDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
