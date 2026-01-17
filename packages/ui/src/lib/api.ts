@@ -121,7 +121,43 @@ class ApiClient {
 
     } catch (error) {
       console.error('API request error:', error);
-      throw error;
+
+      // Enhance error with more details
+      const enhancedError = error as Error & { status?: number; statusText?: string; body?: string; cause?: string };
+
+      // Check if it's a network-level fetch error
+      if (error instanceof TypeError && error.message === 'Failed to fetch') {
+        (enhancedError as any).cause = 'Network error - unable to connect to server. Possible causes: CORS, DNS failure, or server is unreachable.';
+        (enhancedError as any).body = JSON.stringify({
+          error: 'Network error',
+          message: 'Unable to connect to the server. This could be due to:',
+          reasons: [
+            'CORS (Cross-Origin Resource Sharing) restrictions',
+            'DNS resolution failure',
+            'Server is down or unreachable',
+            'Network connectivity issues',
+            'SSL/TLS certificate errors'
+          ]
+        });
+        enhancedError.status = 0;
+        enhancedError.statusText = 'Network Error';
+      } else if (error instanceof TypeError && error.message === 'fetch failed') {
+        (enhancedError as any).cause = 'Network request failed - check server connectivity and CORS settings.';
+        (enhancedError as any).body = JSON.stringify({
+          error: 'Request failed',
+          message: 'The network request failed. Possible reasons:',
+          reasons: [
+            'CORS policy blocked the request',
+            'Server returned invalid response',
+            'Connection was interrupted',
+            'Proxy or firewall blocking the request'
+          ]
+        });
+        enhancedError.status = 0;
+        enhancedError.statusText = 'Request Failed';
+      }
+
+      throw enhancedError;
     }
   }
 

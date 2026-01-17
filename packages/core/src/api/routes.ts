@@ -12,6 +12,7 @@ import { ConfigService } from "@/services/config";
 import { ProviderService } from "@/services/provider";
 import { TransformerService } from "@/services/transformer";
 import { Transformer } from "@/types/transformer";
+import { requestStatsService } from "@/services/requestStats";
 
 // Extend FastifyInstance to include custom services
 declare module "fastify" {
@@ -371,6 +372,9 @@ async function sendRequestToProvider(
     // Read error text first (body can only be read once)
     const errorText = await response.text();
 
+    // Record failure statistics
+    requestStatsService.recordFailure(provider.name, requestBody.model, requestBody, errorText, response.status);
+
     fastify.log.info(`[DEBUG] Error response received, checking transformers for model: ${requestBody.model}`);
 
     // Helper function to execute logErrorResponse on transformers
@@ -451,6 +455,16 @@ async function sendRequestToProvider(
       response.status,
       "provider_response_error"
     );
+  }
+
+  // Record success statistics
+  try {
+    const responseData = await response.clone().json();
+    requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, responseData);
+  } catch (e) {
+    // If clone() fails or response is not JSON, record minimal stats
+    // Note: We cannot safely clone again if the first clone failed
+    requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, { error: "Failed to read response" });
   }
 
   return response;

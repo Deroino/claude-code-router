@@ -143,6 +143,9 @@ export const createServer = async (config: any): Promise<any> => {
 
   // Add endpoint to test a specific provider+model
   app.post("/api/model-test", async (req: any, reply: any) => {
+    // @ts-ignore - requestStatsService is exported but not in type definitions
+    const { requestStatsService } = await import("@musistudio/llms");
+
     try {
       const { provider, model, message } = req.body;
 
@@ -225,6 +228,8 @@ export const createServer = async (config: any): Promise<any> => {
 
       if (response.ok) {
         const data = await response.json();
+        // Record success statistics
+        requestStatsService.recordSuccess(provider, model, processedRequest, data);
         return {
           success: true,
           status: response.status,
@@ -242,6 +247,9 @@ export const createServer = async (config: any): Promise<any> => {
           // If not valid JSON, keep as is
         }
 
+        // Record failure statistics
+        requestStatsService.recordFailure(provider, model, processedRequest, errorText, response.status);
+
         reply.status(response.status).send({
           success: false,
           status: response.status,
@@ -252,12 +260,17 @@ export const createServer = async (config: any): Promise<any> => {
     } catch (error: any) {
       // Handle timeout error
       if (error.name === 'AbortError') {
+        // Record failure statistics for timeout
+        requestStatsService.recordFailure(req.body.provider, req.body.model, req.body, "Request timeout (10 seconds)", 504);
         reply.status(504).send({
           success: false,
           error: "Request timeout (10 seconds)"
         });
         return;
       }
+
+      // Record failure statistics for other errors
+      requestStatsService.recordFailure(req.body.provider, req.body.model, req.body, error.message || "Unknown error occurred", 500);
 
       reply.status(500).send({
         success: false,
@@ -886,6 +899,132 @@ export const createServer = async (config: any): Promise<any> => {
 
     // Return a promise that never resolves to keep the connection open
     return new Promise(() => {});
+  });
+
+  // Get request stats
+  app.get("/api/request-stats", async (req: any, reply: any) => {
+    try {
+      // @ts-ignore - requestStatsService is exported but not in type definitions
+      const { requestStatsService } = await import("@musistudio/llms");
+      const allStats = requestStatsService.getAllStats() as Map<string, any>;
+      const statsArray: Array<{ key: string; provider: string; model: string; success: number; fail: number; lastRequest?: any }> = [];
+      allStats.forEach((value: any, key: string) => {
+        statsArray.push({
+          key,
+          provider: key.split(':')[0],
+          model: key.split(':')[1],
+          ...value
+        });
+      });
+      return { stats: statsArray };
+    } catch (error) {
+      console.error("Failed to get request stats:", error);
+      reply.status(500).send({ error: "Failed to get request stats" });
+    }
+  });
+
+  // Request stats SSE stream
+  app.get("/api/request-stats/stream", async (req: any, reply: any) => {
+    // Set SSE headers
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.setHeader("Access-Control-Allow-Origin", "*");
+    reply.raw.setHeader("X-Accel-Buffering", "no");
+
+    const res = reply.raw;
+    let heartbeatInterval: NodeJS.Timeout | null = null;
+    let statsListener: any = null;
+    let clearListener: any = null;
+    // @ts-ignore - requestStatsService is exported but not in type definitions
+    const { requestStatsService } = await import("@musistudio/llms");
+
+    // Send data function
+    const send = (data: string) => {
+      try {
+        res.write(data);
+      } catch (e) {
+        cleanup();
+      }
+    };
+
+    // Cleanup function
+    const cleanup = () => {
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      if (statsListener) requestStatsService.off('stats_update', statsListener);
+      if (clearListener) requestStatsService.off('stats_clear', clearListener);
+      try { res.end(); } catch (e) {}
+    };
+
+    // Handle connection close
+    req.raw.on('close', cleanup);
+    req.raw.on('error', cleanup);
+
+    // Start response
+    reply.raw.writeHead(200);
+
+    // Send initial stats
+    const allStats = requestStatsService.getAllStats() as Map<string, any>;
+    const initialStats: Array<{ key: string; provider: string; model: string; success: number; fail: number; lastRequest?: any }> = [];
+    allStats.forEach((value: any, key: string) => {
+      initialStats.push({
+        key,
+        provider: key.split(':')[0],
+        model: key.split(':')[1],
+        ...value
+      });
+    });
+
+    send(`data: ${JSON.stringify({
+      type: 'initial',
+      data: initialStats,
+      timestamp: Date.now()
+    })}\n\n`);
+
+    // Listen for updates
+    statsListener = (update: any) => {
+      send(`data: ${JSON.stringify({
+        type: 'update',
+        data: {
+          key: update.key,
+          provider: update.key.split(':')[0],
+          model: update.key.split(':')[1],
+          ...update.stats
+        },
+        timestamp: Date.now()
+      })}\n\n`);
+    };
+
+    // Listen for clear events
+    clearListener = () => {
+      send(`data: ${JSON.stringify({
+        type: 'clear',
+        timestamp: Date.now()
+      })}\n\n`);
+    };
+
+    requestStatsService.on('stats_update', statsListener);
+    requestStatsService.on('stats_clear', clearListener);
+
+    // Heartbeat every 30s
+    heartbeatInterval = setInterval(() => {
+      send(': heartbeat\n\n');
+    }, 30000);
+
+    return new Promise(() => {});
+  });
+
+  // Clear request stats
+  app.delete("/api/request-stats", async (req: any, reply: any) => {
+    try {
+      // @ts-ignore - requestStatsService is exported but not in type definitions
+      const { requestStatsService } = await import("@musistudio/llms");
+      requestStatsService.clearAll();
+      return { success: true, message: "Request stats cleared successfully" };
+    } catch (error) {
+      console.error("Failed to clear request stats:", error);
+      reply.status(500).send({ error: "Failed to clear request stats" });
+    }
   });
 
   // Watch config file for external changes

@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useConfig } from "./ConfigProvider";
 import { ProviderList } from "./ProviderList";
+import { useRequestStats } from "@/hooks/useRequestStats";
 import {
   Dialog,
   DialogContent,
@@ -58,6 +59,9 @@ export function Providers({ showToast, removeToast }: { showToast: (message: str
   const [showModelSelectDialog, setShowModelSelectDialog] = useState<boolean>(false);
   const [modelFetchError, setModelFetchError] = useState<string | null>(null);
   const [modelSearchTerm, setModelSearchTerm] = useState<string>("");
+
+  // Get request statistics
+  const { stats: requestStats } = useRequestStats();
 
   useEffect(() => {
     const fetchProviderTemplates = async () => {
@@ -724,6 +728,7 @@ export function Providers({ showToast, removeToast }: { showToast: (message: str
           onRemove={handleSetDeletingProviderIndex}
           showToast={showToast}
           removeToast={removeToast}
+          requestStats={requestStats}
         />
       </CardContent>
 
