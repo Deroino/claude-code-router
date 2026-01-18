@@ -84,6 +84,7 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
           APIKEY: typeof data.APIKEY === 'string' ? data.APIKEY : '',
           API_TIMEOUT_MS: typeof data.API_TIMEOUT_MS === 'string' ? data.API_TIMEOUT_MS : '600000',
           PROXY_URL: typeof data.PROXY_URL === 'string' ? data.PROXY_URL : '',
+          TEST_PROMPT: typeof data.TEST_PROMPT === 'string' ? data.TEST_PROMPT : '',
           transformers: Array.isArray(data.transformers) ? data.transformers : [],
           Providers: Array.isArray(data.Providers) ? data.Providers : [],
           StatusLine: data.StatusLine && typeof data.StatusLine === 'object' ? {
@@ -135,6 +136,7 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
             APIKEY: '',
             API_TIMEOUT_MS: '600000',
             PROXY_URL: '',
+            TEST_PROMPT: '',
             transformers: [],
             Providers: [],
             StatusLine: undefined,

@@ -240,6 +240,21 @@ export function SettingsDialog({ isOpen, onOpenChange }: SettingsDialogProps) {
               className="transition-all-ease focus:scale-[1.01]"
             />
           </div>
+          <div className="space-y-2">
+            <Label
+              htmlFor="test-prompt"
+              className="transition-all-ease hover:scale-[1.01] cursor-pointer"
+            >
+              Test Prompt
+            </Label>
+            <Input
+              id="test-prompt"
+              value={config.TEST_PROMPT || ""}
+              onChange={(e) => setConfig({ ...config, TEST_PROMPT: e.target.value })}
+              placeholder="Hello, please respond with 'OK' if you can understand this message."
+              className="transition-all-ease focus:scale-[1.01]"
+            />
+          </div>
         </div>
         <DialogFooter className="p-4 pt-0">
           <Button

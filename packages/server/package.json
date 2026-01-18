@@ -27,6 +27,7 @@
     "rotating-file-stream": "^3.2.7",
     "shell-quote": "^1.8.3",
     "tiktoken": "^1.0.21",
+    "undici": "^7.16.0",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

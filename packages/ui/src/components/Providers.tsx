@@ -729,6 +729,7 @@ export function Providers({ showToast, removeToast }: { showToast: (message: str
           showToast={showToast}
           removeToast={removeToast}
           requestStats={requestStats}
+          testPrompt={config?.TEST_PROMPT}
         />
       </CardContent>
 

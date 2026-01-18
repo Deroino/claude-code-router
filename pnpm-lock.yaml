@@ -205,6 +205,9 @@ importers:
       tiktoken:
         specifier: ^1.0.21
         version: 1.0.22
+      undici:
+        specifier: ^7.16.0
+        version: 7.16.0
       uuid:
         specifier: ^11.1.0
         version: 11.1.0

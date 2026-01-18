@@ -5,6 +5,7 @@ import { join } from "path";
 import fastifyStatic from "@fastify/static";
 import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, rmSync, watch, openSync, readSync, closeSync } from "fs";
 import { homedir } from "os";
+import { ProxyAgent } from "undici";
 import {
   getPresetDir,
   readManifestFromDir,
@@ -172,7 +173,8 @@ export const createServer = async (config: any): Promise<any> => {
       }
 
       // Construct test request
-      const testMessage = message || "Hello, please respond with 'OK' if you can understand this message.";
+      const configService = serverInstance.configService;
+      const testMessage = message || configService.get("TEST_PROMPT") || "Hello, please respond with 'OK' if you can understand this message.";
       const requestBody = {
         model: model,
         messages: [
@@ -214,7 +216,7 @@ export const createServer = async (config: any): Promise<any> => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000); // 10 seconds timeout
 
-      const response = await fetch(providerData.baseUrl, {
+      const fetchOptions: RequestInit = {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -222,17 +224,47 @@ export const createServer = async (config: any): Promise<any> => {
         },
         body: JSON.stringify(processedRequest),
         signal: controller.signal
-      });
+      };
+
+      // Use proxy if configured
+      const httpsProxy = configService.getHttpsProxy();
+      if (httpsProxy) {
+        (fetchOptions as any).dispatcher = new ProxyAgent(httpsProxy);
+      }
+
+      const response = await fetch(providerData.baseUrl, fetchOptions);
 
       clearTimeout(timeout);
 
       if (response.ok) {
         const data = await response.json();
+
+        // Extract response text from model
+        let responseText = '';
+        if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
+          responseText = data.choices[0].message.content;
+        } else if (data.content && data.content[0] && data.content[0].text) {
+          responseText = data.content[0].text;
+        }
+
+        // Check if response is empty after trimming
+        const trimmedResponse = responseText.trim().replace(/\s+/g, '');
+        if (!trimmedResponse) {
+          // Record failure for empty response
+          requestStatsService.recordFailure(provider, model, processedRequest, "Model returned empty response", 200);
+          reply.status(200).send({
+            success: false,
+            error: "Model returned empty response"
+          });
+          return;
+        }
+
         // Record success statistics
         requestStatsService.recordSuccess(provider, model, processedRequest, data);
         return {
           success: true,
           status: response.status,
+          response: responseText,
           data: data
         };
       } else {
@@ -269,12 +301,27 @@ export const createServer = async (config: any): Promise<any> => {
         return;
       }
 
+      // Build detailed error message
+      const serverInstance = (app as any)._server;
+      const providerService = serverInstance.providerService;
+      const providerData = providerService.getProvider(req.body.provider);
+      const targetUrl = providerData?.baseUrl || 'unknown';
+
+      let errorDetail = `Failed to connect to provider API at ${targetUrl}`;
+      if (error.cause) {
+        errorDetail += `\nCause: ${error.cause}`;
+      }
+      if (error.code) {
+        errorDetail += `\nError code: ${error.code}`;
+      }
+      errorDetail += `\nOriginal error: ${error.message || 'Unknown error'}`;
+
       // Record failure statistics for other errors
-      requestStatsService.recordFailure(req.body.provider, req.body.model, req.body, error.message || "Unknown error occurred", 500);
+      requestStatsService.recordFailure(req.body.provider, req.body.model, req.body, errorDetail, 500);
 
       reply.status(500).send({
         success: false,
-        error: error.message || "Unknown error occurred"
+        error: errorDetail
       });
       return;
     }

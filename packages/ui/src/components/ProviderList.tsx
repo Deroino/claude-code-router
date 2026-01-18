@@ -14,6 +14,7 @@ interface ProviderListProps {
   showToast: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => string;
   removeToast: (id: string) => void;
   requestStats?: RequestStatsItem[];
+  testPrompt?: string;
 }
 
 interface ModelBadgeProps {
@@ -22,9 +23,10 @@ interface ModelBadgeProps {
   showToast: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => string;
   removeToast: (id: string) => void;
   requestStats?: RequestStatsItem[];
+  testPrompt?: string;
 }
 
-function ModelBadge({ providerName, model, showToast, removeToast, requestStats }: ModelBadgeProps) {
+function ModelBadge({ providerName, model, showToast, removeToast, requestStats, testPrompt }: ModelBadgeProps) {
   const [isTesting, setIsTesting] = useState(false);
 
   // Find stats for current provider:model
@@ -53,10 +55,12 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats 
     const toastId = showToast(`Testing ${textToTest}...`, 'warning', 0);
 
     try {
-      const result = await api.testModel(providerName, model || "", "hello");
+      const result = await api.testModel(providerName, model || "", testPrompt);
       removeToast(toastId);
 
-      if (result?.success) {
+      if (result?.success && result?.response) {
+        showToast(`"${textToTest}" test OK\nResponse: ${result.response}`, 'success', 8000);
+      } else if (result?.success) {
         showToast(`"${textToTest}" test OK`, 'success');
       } else {
         showToast(`"${textToTest}" test failed`, 'error', 5000);
