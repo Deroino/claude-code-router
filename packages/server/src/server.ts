@@ -183,7 +183,7 @@ export const createServer = async (config: any): Promise<any> => {
             content: testMessage
           }
         ],
-        max_tokens: 10,
+        max_tokens: 300,
         stream: false
       };
 

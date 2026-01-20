@@ -459,17 +459,65 @@ async function sendRequestToProvider(
 
   // Record success statistics
   try {
-    const responseData = await response.clone().json();
-    requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, responseData);
+    // Check if this is a streaming response (Content-Type contains text/event-stream or application/x-ndjson)
+    const contentType = response.headers.get('content-type') || response.headers.get('Content-Type');
+    const isStreamResponse = contentType &&
+      (contentType.includes('text/event-stream') ||
+       contentType.includes('application/x-ndjson') ||
+       contentType.includes('application/json-seq'));
+
+    if (isStreamResponse) {
+      // For streaming responses, we can't simply parse the entire response as JSON
+      // Only record basic response info to avoid trying to parse the entire stream
+      requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
+        status: response.status,
+        headers: {
+          'content-type': contentType,
+          'content-length': response.headers.get('content-length') || response.headers.get('Content-Length')
+        },
+        message: "Stream response - data recorded separately",
+        isStream: true
+      });
+    } else {
+      // For non-streaming responses, parse JSON normally
+      const responseData = await response.clone().json();
+      requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, responseData);
+    }
   } catch (e) {
     // If JSON parsing fails, try to read as text to preserve raw response
     try {
       const rawText = await response.clone().text();
-      requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
-        error: "Failed to parse response as JSON",
-        rawResponse: rawText,
-        parseError: e instanceof Error ? e.message : String(e)
-      });
+
+      // Check if this is SSE format
+      const isSSEFormat = rawText.startsWith('data:');
+
+      if (isSSEFormat) {
+        // If it's SSE format, we can try to parse individual data blocks
+        try {
+          const sseEvents = parseSSEEvents(rawText);
+          requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
+            error: "Stream response processed as SSE",
+            sseEvents: sseEvents,
+            eventCount: sseEvents.length,
+            isStream: true
+          });
+        } catch (sseParseError) {
+          // If SSE parsing also fails, record original text
+          requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
+            error: "Failed to parse response as JSON or SSE",
+            rawResponse: rawText.substring(0, 1000) + (rawText.length > 1000 ? '...' : ''), // Limit length
+            parseError: e instanceof Error ? e.message : String(e),
+            sseParseError: sseParseError instanceof Error ? sseParseError.message : String(sseParseError)
+          });
+        }
+      } else {
+        // Regular non-SSE response
+        requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
+          error: "Failed to parse response as JSON",
+          rawResponse: rawText.substring(0, 1000) + (rawText.length > 1000 ? '...' : ''), // Limit length
+          parseError: e instanceof Error ? e.message : String(e)
+        });
+      }
     } catch (textError) {
       // If even text reading fails, record minimal error info
       requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
@@ -481,6 +529,50 @@ async function sendRequestToProvider(
   }
 
   return response;
+}
+
+/**
+ * Parse SSE (Server-Sent Events) events from raw text
+ * Handles multiple data blocks in the format: data: {...}\n\ndata: {...}\n\n
+ */
+function parseSSEEvents(rawText: string): any[] {
+  const events: any[] = [];
+  const lines = rawText.split('\n');
+  let currentEvent: any = {};
+
+  for (const line of lines) {
+    if (line.trim() === '') {
+      // Empty line indicates end of an event
+      if (Object.keys(currentEvent).length > 0) {
+        events.push({ ...currentEvent });
+        currentEvent = {};
+      }
+    } else if (line.startsWith('data: ')) {
+      const data = line.slice(6).trim();
+      if (data === '[DONE]') {
+        currentEvent.data = { type: 'done' };
+      } else {
+        try {
+          currentEvent.data = JSON.parse(data);
+        } catch (e) {
+          currentEvent.data = { raw: data, error: 'JSON parse failed' };
+        }
+      }
+    } else if (line.startsWith('event: ')) {
+      currentEvent.event = line.slice(7).trim();
+    } else if (line.startsWith('id: ')) {
+      currentEvent.id = line.slice(4).trim();
+    } else if (line.startsWith('retry: ')) {
+      currentEvent.retry = parseInt(line.slice(7).trim());
+    }
+  }
+
+  // Handle the last event (if not ending with empty line)
+  if (Object.keys(currentEvent).length > 0) {
+    events.push(currentEvent);
+  }
+
+  return events;
 }
 
 /**
@@ -634,7 +726,10 @@ export const registerApiRoutes = async (
         );
       }
 
-      if (!apiKey?.trim()) {
+      if (typeof apiKey === 'string' && !apiKey.trim()) {
+        throw createApiError("API key is required", 400, "invalid_request");
+      }
+      if (typeof apiKey !== 'string' && !apiKey) {
         throw createApiError("API key is required", 400, "invalid_request");
       }
 
