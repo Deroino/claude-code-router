@@ -46,6 +46,18 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
     }
   };
 
+  const handleCopyContent = async (content: any, label: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const textToCopy = typeof content === 'string' ? content : JSON.stringify(content, null, 2);
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      showToast(`${label} copied to clipboard!`, 'success');
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+      showToast('Failed to copy to clipboard.', 'error');
+    }
+  };
+
   const handleTest = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isTesting) return;
@@ -63,7 +75,9 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
       } else if (result?.success) {
         showToast(`"${textToTest}" test OK`, 'success');
       } else {
-        showToast(`"${textToTest}" test failed`, 'error', 5000);
+        // Display error message from backend response
+        const errorMsg = result?.error || 'Unknown error';
+        showToast(`"${textToTest}" test failed: ${errorMsg}`, 'error', 5000);
       }
     } catch (err) {
       console.error('Model test failed: ', err);
@@ -91,7 +105,7 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
           detail = anyErr.message;
         }
       }
-      showToast(`"${textToTest}" test failed: ${detail}`, 'error', 10000);
+      showToast(`"${textToTest}" test failed: ${detail}`, 'error', 5000);
     } finally {
       setIsTesting(false);
     }
@@ -139,15 +153,28 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
                   </div>
                   <div>
                     <div className="font-semibold text-xs mb-1 text-gray-900">Request:</div>
-                    <pre className="bg-gray-50 border border-gray-200 p-2 rounded text-xs overflow-auto max-h-32 text-gray-900">
+                    <pre
+                      className="bg-gray-50 border border-gray-200 p-2 rounded text-xs overflow-auto max-h-32 text-gray-900 cursor-pointer hover:bg-gray-100 transition-colors"
+                      onClick={(e) => handleCopyContent(lastRequest.request, 'Request', e)}
+                      title="Click to copy request"
+                    >
                       {JSON.stringify(lastRequest.request, null, 2)}
                     </pre>
                   </div>
                   <div>
                     <div className="font-semibold text-xs mb-1 text-gray-900">Response:</div>
-                    <pre className="bg-gray-50 border border-gray-200 p-2 rounded text-xs overflow-auto max-h-32 text-gray-900">
+                    <pre
+                      className={`${lastRequest.response && typeof lastRequest.response === 'object' && 'error' in lastRequest.response ? 'bg-yellow-50 border-yellow-200 hover:bg-yellow-100' : 'bg-gray-50 border-gray-200 hover:bg-gray-100'} border p-2 rounded text-xs overflow-auto max-h-32 text-gray-900 cursor-pointer transition-colors`}
+                      onClick={(e) => handleCopyContent(lastRequest.response, 'Response', e)}
+                      title="Click to copy response"
+                    >
                       {JSON.stringify(lastRequest.response, null, 2)}
                     </pre>
+                    {lastRequest.response && typeof lastRequest.response === 'object' && 'error' in lastRequest.response && (
+                      <div className="text-xs text-yellow-600 mt-1 italic">
+                        ⚠️ Response reading failed - HTTP request succeeded but response body could not be parsed
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -184,13 +211,21 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
                   )}
                   <div>
                     <div className="font-semibold text-xs mb-1 text-gray-900">Request:</div>
-                    <pre className="bg-gray-50 border border-gray-200 p-2 rounded text-xs overflow-auto max-h-24 text-gray-900">
+                    <pre
+                      className="bg-gray-50 border border-gray-200 p-2 rounded text-xs overflow-auto max-h-24 text-gray-900 cursor-pointer hover:bg-gray-100 transition-colors"
+                      onClick={(e) => handleCopyContent(lastRequest.request, 'Request', e)}
+                      title="Click to copy request"
+                    >
                       {JSON.stringify(lastRequest.request, null, 2)}
                     </pre>
                   </div>
                   <div>
                     <div className="font-semibold text-xs mb-1 text-red-600">Error:</div>
-                    <pre className="bg-red-50 border border-red-200 p-2 rounded text-xs overflow-auto max-h-32 text-red-700">
+                    <pre
+                      className="bg-red-50 border border-red-200 p-2 rounded text-xs overflow-auto max-h-32 text-red-700 cursor-pointer hover:bg-red-100 transition-colors"
+                      onClick={(e) => handleCopyContent(lastRequest.error, 'Error', e)}
+                      title="Click to copy error"
+                    >
                       {lastRequest.error}
                     </pre>
                   </div>
