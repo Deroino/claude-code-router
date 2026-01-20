@@ -462,9 +462,22 @@ async function sendRequestToProvider(
     const responseData = await response.clone().json();
     requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, responseData);
   } catch (e) {
-    // If clone() fails or response is not JSON, record minimal stats
-    // Note: We cannot safely clone again if the first clone failed
-    requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, { error: "Failed to read response" });
+    // If JSON parsing fails, try to read as text to preserve raw response
+    try {
+      const rawText = await response.clone().text();
+      requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
+        error: "Failed to parse response as JSON",
+        rawResponse: rawText,
+        parseError: e instanceof Error ? e.message : String(e)
+      });
+    } catch (textError) {
+      // If even text reading fails, record minimal error info
+      requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
+        error: "Failed to read response",
+        jsonError: e instanceof Error ? e.message : String(e),
+        textError: textError instanceof Error ? textError.message : String(textError)
+      });
+    }
   }
 
   return response;

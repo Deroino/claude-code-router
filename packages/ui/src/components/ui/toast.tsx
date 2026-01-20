@@ -46,14 +46,16 @@ export function Toast({ message, type, duration = 3000, onClose }: ToastProps) {
   };
 
   return (
-    <div className={`pointer-events-auto flex items-center justify-between p-4 rounded-lg border shadow-lg ${getBackgroundColor()} transition-all duration-300 ease-in-out max-w-[80vw] md:max-w-lg break-words whitespace-normal`}>
-      <div className="flex items-center space-x-2">
-        {getIcon()}
-        <span className="text-sm font-medium">{message}</span>
+    <div className={`pointer-events-auto flex items-start justify-between gap-3 p-4 rounded-lg border shadow-lg ${getBackgroundColor()} transition-all duration-300 ease-in-out max-w-[90vw] md:max-w-xl max-h-[40vh] overflow-hidden`}>
+      <div className="flex items-start gap-2 min-w-0 flex-1 overflow-y-auto overflow-x-hidden pr-2 custom-scrollbar">
+        <div className="flex-shrink-0 mt-0.5 sticky top-0">
+          {getIcon()}
+        </div>
+        <span className="text-sm font-medium break-words whitespace-pre-wrap overflow-wrap-anywhere min-w-0">{message}</span>
       </div>
       <button
         onClick={onClose}
-        className="ml-4 text-gray-500 hover:text-gray-700 focus:outline-none"
+        className="flex-shrink-0 text-gray-500 hover:text-gray-700 focus:outline-none transition-colors sticky top-0"
       >
         <X className="h-4 w-4" />
       </button>

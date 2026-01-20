@@ -239,22 +239,35 @@ export const createServer = async (config: any): Promise<any> => {
       if (response.ok) {
         const data = await response.json();
 
+        // Log the full response structure for debugging
+        app.log.debug({ responseData: data }, 'Model test response structure');
+
         // Extract response text from model
         let responseText = '';
         if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
           responseText = data.choices[0].message.content;
         } else if (data.content && data.content[0] && data.content[0].text) {
           responseText = data.content[0].text;
+        } else {
+          // Log unrecognized format
+          app.log.warn({ responseData: data }, 'Unrecognized response format in model test');
         }
 
-        // Check if response is empty after trimming
-        const trimmedResponse = responseText.trim().replace(/\s+/g, '');
+        // Check if response is empty after trimming (only remove leading/trailing whitespace)
+        const trimmedResponse = responseText.trim();
         if (!trimmedResponse) {
-          // Record failure for empty response
-          requestStatsService.recordFailure(provider, model, processedRequest, "Model returned empty response", 200);
+          // Record failure for empty response with full response body for debugging
+          const errorMessage = `Model returned empty response. Raw response: ${JSON.stringify(data)}`;
+          requestStatsService.recordFailure(provider, model, processedRequest, errorMessage, 200);
           reply.status(200).send({
             success: false,
-            error: "Model returned empty response"
+            error: "Model returned empty response",
+            rawResponse: data,
+            debug: {
+              message: "Response extraction failed or content was empty",
+              responseStructure: Object.keys(data),
+              extractedText: responseText
+            }
           });
           return;
         }

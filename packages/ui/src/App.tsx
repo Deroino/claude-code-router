@@ -55,9 +55,9 @@ function App() {
 
   // Panel visibility states
   const [showProviders, setShowProviders] = useState(true);
-  const [showRouter, setShowRouter] = useState(true);
-  const [showTransformers, setShowTransformers] = useState(true);
-  const [showModelMonitor, setShowModelMonitor] = useState(false);
+  const [showRouter, setShowRouter] = useState(false);
+  const [showTransformers, setShowTransformers] = useState(false);
+  const [showModelMonitor, setShowModelMonitor] = useState(true);
 
   // Model Monitor Data - Always keep SSE connection alive, regardless of panel visibility
   const { logs: modelMonitorLogs, currentFile: modelMonitorFile, status: modelMonitorStatus } = useModelMonitorLogs({
@@ -76,10 +76,17 @@ function App() {
   const [isUpdateFeatureAvailable, setIsUpdateFeatureAvailable] = useState(true);
   const hasAutoCheckedUpdate = useRef(false);
 
-  // Show toast function
+  // Show toast function with max limit
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'warning', duration?: number) => {
     const id = Date.now() + Math.random().toString(36).substring(2);
-    setToasts(prev => [...prev, { id, message, type, duration }]);
+    setToasts(prev => {
+      // Keep only the last 4 toasts, remove oldest if exceeds limit
+      const newToasts = [...prev, { id, message, type, duration }];
+      if (newToasts.length > 5) {
+        return newToasts.slice(-5);
+      }
+      return newToasts;
+    });
     return id;
   }, []);
 
