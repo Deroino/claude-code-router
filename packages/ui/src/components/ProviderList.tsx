@@ -5,7 +5,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { api } from "@/lib/api";
 import type { Provider } from "@/types";
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 
 interface ProviderListProps {
   providers: Provider[];
@@ -15,6 +15,8 @@ interface ProviderListProps {
   removeToast: (id: string) => void;
   requestStats?: RequestStatsItem[];
   testPrompt?: string;
+  hoveredModel?: { provider: string | null; model: string | null } | null;
+  onBadgeRef?: (provider: string, model: string, ref: HTMLDivElement | null) => void;
 }
 
 interface ModelBadgeProps {
@@ -24,10 +26,20 @@ interface ModelBadgeProps {
   removeToast: (id: string) => void;
   requestStats?: RequestStatsItem[];
   testPrompt?: string;
+  isHovered?: boolean;
+  onBadgeRef?: (ref: HTMLDivElement | null) => void;
 }
 
-function ModelBadge({ providerName, model, showToast, removeToast, requestStats, testPrompt }: ModelBadgeProps) {
+function ModelBadge({ providerName, model, showToast, removeToast, requestStats, testPrompt, isHovered, onBadgeRef }: ModelBadgeProps) {
   const [isTesting, setIsTesting] = useState(false);
+  const badgeRef = useRef<HTMLDivElement>(null);
+
+  // Register badge ref when component mounts
+  useEffect(() => {
+    if (onBadgeRef) {
+      onBadgeRef(badgeRef.current);
+    }
+  }, [onBadgeRef, providerName, model]);
 
   // Find stats for current provider:model
   const stats = requestStats?.find(s => s.provider === providerName && s.model === model);
@@ -113,8 +125,9 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
 
   return (
     <Badge
+      ref={badgeRef}
       variant="outline"
-      className="flex flex-col items-stretch h-auto py-1 px-2 gap-0.5 transition-all duration-200 hover:scale-105 cursor-pointer bg-white hover:bg-gray-50/80 shadow-sm hover:shadow border-gray-200 w-fit max-w-full"
+      className={`flex flex-col items-stretch h-auto py-1 px-2 gap-0.5 transition-all duration-200 hover:scale-105 cursor-pointer bg-white hover:bg-gray-50/80 shadow-sm hover:shadow border-gray-200 w-fit max-w-full ${isHovered ? 'ring-2 ring-blue-500 ring-offset-2 bg-blue-50 border-blue-300' : ''}`}
       onClick={handleCopy}
     >
       {/* First Row: Model Name + Test Button */}
@@ -241,7 +254,7 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
   );
 }
 
-export function ProviderList({ providers, onEdit, onRemove, showToast, removeToast, requestStats }: ProviderListProps) {
+export function ProviderList({ providers, onEdit, onRemove, showToast, removeToast, requestStats, hoveredModel, onBadgeRef }: ProviderListProps) {
   // Wrap the entire provider list with a single TooltipProvider to avoid multiple providers
   if (!providers || !Array.isArray(providers)) {
     return (
@@ -291,6 +304,8 @@ export function ProviderList({ providers, onEdit, onRemove, showToast, removeToa
                       showToast={showToast}
                       removeToast={removeToast}
                       requestStats={requestStats}
+                      isHovered={hoveredModel?.provider === providerName && hoveredModel?.model === model}
+                      onBadgeRef={(ref) => onBadgeRef?.(providerName, model, ref)}
                     />
                   ))}
                 </div>

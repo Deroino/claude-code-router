@@ -26,6 +26,7 @@ interface ComboboxProps {
   placeholder?: string;
   searchPlaceholder?: string;
   emptyPlaceholder?: string;
+  hoveredValue?: string;
 }
 
 export function Combobox({
@@ -35,10 +36,12 @@ export function Combobox({
   placeholder = "Select an option...",
   searchPlaceholder = "Search...",
   emptyPlaceholder = "No options found.",
+  hoveredValue,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false)
 
   const selectedOption = options.find((option) => option.value === value)
+  const isHovered = hoveredValue && value === hoveredValue
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -47,7 +50,7 @@ export function Combobox({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className="w-full justify-between transition-all-ease hover:scale-[1.02] active:scale-[0.98]"
+          className={`w-full justify-between transition-all-ease hover:scale-[1.02] active:scale-[0.98] ${isHovered ? 'ring-2 ring-blue-500 ring-offset-2 bg-blue-50 border-blue-300' : ''}`}
         >
           {selectedOption ? selectedOption.label : placeholder}
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50 transition-transform duration-200 group-data-[state=open]:rotate-180" />

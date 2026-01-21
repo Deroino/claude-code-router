@@ -5,7 +5,11 @@ import { Input } from "@/components/ui/input";
 import { useConfig } from "./ConfigProvider";
 import { Combobox } from "./ui/combobox";
 
-export function Router() {
+interface RouterProps {
+  hoveredModel?: { provider: string | null; model: string | null };
+}
+
+export function Router({ hoveredModel }: RouterProps) {
   const { t } = useTranslation();
   const { config, setConfig } = useConfig();
 
@@ -52,18 +56,23 @@ export function Router() {
   const modelOptions = providers.flatMap((provider) => {
     // Handle case where individual provider might be null or undefined
     if (!provider) return [];
-    
+
     // Handle case where provider.models might be null or undefined
     const models = Array.isArray(provider.models) ? provider.models : [];
-    
+
     // Handle case where provider.name might be null or undefined
     const providerName = provider.name || "Unknown Provider";
-    
+
     return models.map((model) => ({
       value: `${providerName},${model || "Unknown Model"}`,
       label: `${providerName}, ${model || "Unknown Model"}`,
     }));
   });
+
+  // Construct the hovered value for highlighting
+  const hoveredValue = hoveredModel?.provider && hoveredModel?.model
+    ? `${hoveredModel.provider},${hoveredModel.model}`
+    : undefined;
 
   return (
     <Card className="flex h-full flex-col rounded-lg border shadow-sm">
@@ -80,6 +89,7 @@ export function Router() {
             placeholder={t("router.selectModel")}
             searchPlaceholder={t("router.searchModel")}
             emptyPlaceholder={t("router.noModelFound")}
+            hoveredValue={hoveredValue}
           />
         </div>
         <div className="space-y-2">
@@ -91,6 +101,7 @@ export function Router() {
             placeholder={t("router.selectModel")}
             searchPlaceholder={t("router.searchModel")}
             emptyPlaceholder={t("router.noModelFound")}
+            hoveredValue={hoveredValue}
           />
         </div>
         <div className="space-y-2">
@@ -102,6 +113,7 @@ export function Router() {
             placeholder={t("router.selectModel")}
             searchPlaceholder={t("router.searchModel")}
             emptyPlaceholder={t("router.noModelFound")}
+            hoveredValue={hoveredValue}
           />
         </div>
         <div className="space-y-2">
@@ -115,6 +127,7 @@ export function Router() {
                 placeholder={t("router.selectModel")}
                 searchPlaceholder={t("router.searchModel")}
                 emptyPlaceholder={t("router.noModelFound")}
+                hoveredValue={hoveredValue}
               />
             </div>
             <div className="w-48">
@@ -137,6 +150,7 @@ export function Router() {
             placeholder={t("router.selectModel")}
             searchPlaceholder={t("router.searchModel")}
             emptyPlaceholder={t("router.noModelFound")}
+            hoveredValue={hoveredValue}
           />
         </div>
         <div className="space-y-2">
@@ -150,6 +164,7 @@ export function Router() {
                 placeholder={t("router.selectModel")}
                 searchPlaceholder={t("router.searchModel")}
                 emptyPlaceholder={t("router.noModelFound")}
+                hoveredValue={hoveredValue}
               />
             </div>
             <div className="w-48">
@@ -175,6 +190,7 @@ export function Router() {
             placeholder={t("router.selectModel")}
             searchPlaceholder={t("router.searchModel")}
             emptyPlaceholder={t("router.noModelFound")}
+            hoveredValue={hoveredValue}
           />
         </div>
       </CardContent>

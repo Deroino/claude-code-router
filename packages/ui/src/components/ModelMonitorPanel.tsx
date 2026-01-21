@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ModelMonitorLogEntry } from "@/hooks/useModelMonitorLogs";
@@ -8,9 +8,10 @@ interface ModelMonitorPanelProps {
   status: 'connecting' | 'connected' | 'error';
   currentFile: string | null;
   onClose: () => void;
+  onHoverModel?: (provider: string | null, model: string | null) => void;
 }
 
-export function ModelMonitorPanel({ logs, status, currentFile, onClose }: ModelMonitorPanelProps) {
+export function ModelMonitorPanel({ logs, status, currentFile, onClose, onHoverModel }: ModelMonitorPanelProps) {
   const endRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when logs update
@@ -19,6 +20,32 @@ export function ModelMonitorPanel({ logs, status, currentFile, onClose }: ModelM
       endRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [logs]);
+
+  // Handle hover on log entry
+  const handleMouseEnter = useCallback((provider: string | undefined, model: string | undefined) => {
+    console.log('[ModelMonitorPanel] MouseEnter:', { provider, model, hasOnHoverModel: !!onHoverModel });
+
+    // Handle case where provider is undefined but model contains "provider,model" format
+    let actualProvider = provider;
+    let actualModel = model;
+
+    if (!actualProvider && actualModel && actualModel.includes(',')) {
+      const parts = actualModel.split(',');
+      actualProvider = parts[0];
+      actualModel = parts.slice(1).join(',');
+    }
+
+    if (onHoverModel && actualProvider && actualModel) {
+      onHoverModel(actualProvider, actualModel);
+    }
+  }, [onHoverModel]);
+
+  const handleMouseLeave = useCallback(() => {
+    console.log('[ModelMonitorPanel] MouseLeave');
+    if (onHoverModel) {
+      onHoverModel(null, null);
+    }
+  }, [onHoverModel]);
 
   return (
     <div className="flex flex-col h-full rounded-md border bg-white shadow-sm overflow-hidden animate-slide-in">
@@ -61,7 +88,12 @@ export function ModelMonitorPanel({ logs, status, currentFile, onClose }: ModelM
             <div className="text-muted-foreground text-center py-8">Waiting for requests...</div>
           ) : (
             logs.map((log) => (
-              <div key={log.id} className="rounded-sm border bg-white px-3 py-2 shadow-sm hover:shadow transition-all">
+              <div
+                key={log.id}
+                className="rounded-sm border bg-white px-3 py-2 shadow-sm hover:shadow transition-all cursor-pointer"
+                onMouseEnter={() => handleMouseEnter(log.provider, log.model)}
+                onMouseLeave={handleMouseLeave}
+              >
                 <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
                   <div className="flex items-center gap-2">
                     <span className="font-semibold text-gray-500">{log.timestamp}</span>
@@ -73,7 +105,7 @@ export function ModelMonitorPanel({ logs, status, currentFile, onClose }: ModelM
                     <div className="flex flex-col gap-1">
                       <div className="flex items-center gap-2">
                          {log.scenarioLabel && (
-                           <span className="px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600 text-[10px] font-medium border border-blue-100">
+                           <span className="px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600 text-[10px] font-medium border border-blue-100 whitespace-nowrap">
                              {log.scenarioLabel}
                            </span>
                          )}

@@ -59,11 +59,43 @@ function App() {
   const [showTransformers, setShowTransformers] = useState(false);
   const [showModelMonitor, setShowModelMonitor] = useState(true);
 
+  // Hover model state for cross-component highlighting
+  const [hoveredModel, setHoveredModel] = useState<{ provider: string | null; model: string | null } | undefined>(undefined);
+
+  // Badge refs for auto-scroll to highlighted element
+  const badgeRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
   // Model Monitor Data - Always keep SSE connection alive, regardless of panel visibility
   const { logs: modelMonitorLogs, currentFile: modelMonitorFile, status: modelMonitorStatus } = useModelMonitorLogs({
     isOpen: true,
     maxItems: 50
   });
+
+  // Handle hover on model from ModelMonitorPanel
+  const handleHoverModel = useCallback((provider: string | null, model: string | null) => {
+    console.log('[App] handleHoverModel:', { provider, model });
+    setHoveredModel({ provider, model });
+
+    // Auto-scroll to the badge in Provider panel when hovering
+    if (provider && model) {
+      const key = `${provider},${model}`;
+      const badgeElement = badgeRefs.current.get(key);
+      console.log('[App] Looking for badge:', key, 'found:', !!badgeElement);
+      if (badgeElement) {
+        badgeElement.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+      }
+    }
+  }, []);
+
+  // Register badge ref from ProviderList
+  const handleBadgeRef = useCallback((provider: string, model: string, ref: HTMLDivElement | null) => {
+    const key = `${provider},${model}`;
+    if (ref) {
+      badgeRefs.current.set(key, ref);
+    } else {
+      badgeRefs.current.delete(key);
+    }
+  }, []);
 
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'error' | 'warning'; duration?: number }[]>([]);
@@ -456,7 +488,12 @@ function App() {
         {/* Left Column: Providers */}
         {showProviders && (
           <div className="flex-1 min-w-0 animate-slide-in">
-            <Providers showToast={showToast} removeToast={removeToast} />
+            <Providers
+              showToast={showToast}
+              removeToast={removeToast}
+              hoveredModel={hoveredModel}
+              onBadgeRef={handleBadgeRef}
+            />
           </div>
         )}
 
@@ -465,7 +502,7 @@ function App() {
           <div className="flex flex-1 flex-col gap-4 min-w-0 animate-slide-in">
             {showRouter && (
               <div className="flex-1 min-h-0">
-                <Router />
+                <Router hoveredModel={hoveredModel} />
               </div>
             )}
             {showTransformers && (
@@ -484,6 +521,7 @@ function App() {
               status={modelMonitorStatus}
               currentFile={modelMonitorFile}
               onClose={() => setShowModelMonitor(false)}
+              onHoverModel={handleHoverModel}
             />
           </div>
         )}

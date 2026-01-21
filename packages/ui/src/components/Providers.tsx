@@ -34,7 +34,17 @@ interface ModelData {
 
 interface ProviderType extends Provider {}
 
-export function Providers({ showToast, removeToast }: { showToast: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => string; removeToast: (id: string) => void }) {
+export function Providers({
+  showToast,
+  removeToast,
+  hoveredModel,
+  onBadgeRef
+}: {
+  showToast: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => string;
+  removeToast: (id: string) => void;
+  hoveredModel?: { provider: string | null; model: string | null } | null | undefined;
+  onBadgeRef?: (provider: string, model: string, ref: HTMLDivElement | null) => void;
+}) {
   const { t } = useTranslation();
   const { config, setConfig } = useConfig();
   const [editingProviderIndex, setEditingProviderIndex] = useState<number | null>(null);
@@ -730,6 +740,8 @@ export function Providers({ showToast, removeToast }: { showToast: (message: str
           removeToast={removeToast}
           requestStats={requestStats}
           testPrompt={config?.TEST_PROMPT}
+          hoveredModel={hoveredModel}
+          onBadgeRef={onBadgeRef}
         />
       </CardContent>
 
