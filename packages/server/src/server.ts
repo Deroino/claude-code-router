@@ -26,6 +26,7 @@ import {
 } from "@CCR/shared";
 import fastifyMultipart from "@fastify/multipart";
 import AdmZip from "adm-zip";
+import { ConfigService } from "@musistudio/llms";
 
 export const createServer = async (config: any): Promise<any> => {
   const server = new Server(config);
@@ -1089,13 +1090,25 @@ export const createServer = async (config: any): Promise<any> => {
 
   // Watch config file for external changes
   try {
+    // Get ConfigService instance for hot-reload support
+    const configService = (server as any).configService as ConfigService;
+
     configWatcher = watch(CONFIG_FILE, { persistent: true }, async (eventType) => {
       if (eventType === 'change') {
         try {
-          const newConfig = await readConfigFile();
-          broadcastConfigChange(newConfig);
+          // Trigger ConfigService reload with validation
+          const result = await configService.reloadWithValidation();
+
+          if (result.valid && result.config) {
+            // Reload successful, broadcast new config to SSE clients
+            broadcastConfigChange(result.config);
+            console.log('Config reloaded successfully');
+          } else {
+            // Reload failed, keep old config
+            console.error('Config reload failed:', result.error);
+          }
         } catch (err) {
-          console.error('Error reading config file change:', err);
+          console.error('Error reloading config:', err);
         }
       }
     });

@@ -1,8 +1,12 @@
 import { FastifyRequest, FastifyReply } from "fastify";
+import { ConfigService } from "@musistudio/llms";
 
 export const apiKeyAuth =
-  (config: any) =>
+  (configService: ConfigService) =>
   async (req: FastifyRequest, reply: FastifyReply, done: () => void) => {
+    // Get latest config from ConfigService (supports hot-reload)
+    const config = configService.getAll();
+
     // Check if authentication is explicitly disabled via config
     if (config.noAuth === true) {
       return done();

@@ -16,6 +16,7 @@ import { IAgent, ITool } from "./agents/type";
 import agentsManager from "./agents";
 import { EventEmitter } from "node:events";
 import { pluginManager, tokenSpeedPlugin } from "@musistudio/llms";
+import { ConfigService } from "@musistudio/llms";
 
 const event = new EventEmitter()
 
@@ -189,6 +190,9 @@ async function getServer(options: RunOptions = {}) {
   // Register and configure plugins from config
   await registerPluginsFromConfig(serverInstance, config);
 
+  // Get ConfigService instance from server for hot-reload support
+  const configService = (serverInstance as any).configService as ConfigService;
+
   // Add async preHandler hook for authentication
   serverInstance.addHook("preHandler", async (req: any, reply: any) => {
     return new Promise<void>((resolve, reject) => {
@@ -196,8 +200,8 @@ async function getServer(options: RunOptions = {}) {
         if (err) reject(err);
         else resolve();
       };
-      // Call the async auth function
-      apiKeyAuth(config)(req, reply, done).catch(reject);
+      // Call the async auth function with ConfigService (supports hot-reload)
+      apiKeyAuth(configService)(req, reply, done).catch(reject);
     });
   });
   serverInstance.addHook("preHandler", async (req: any, reply: any) => {
@@ -211,14 +215,16 @@ async function getServer(options: RunOptions = {}) {
   serverInstance.addHook("preHandler", async (req: any, reply: any) => {
     if (req.pathname.endsWith("/v1/messages")) {
       const useAgents = []
+      // Get latest config from ConfigService (supports hot-reload)
+      const currentConfig = configService.getAll();
 
       for (const agent of agentsManager.getAllAgents()) {
-        if (agent.shouldHandle(req, config)) {
+        if (agent.shouldHandle(req, currentConfig)) {
           // Set agent identifier
           useAgents.push(agent.name)
 
           // change request body
-          agent.reqHandler(req, config);
+          agent.reqHandler(req, currentConfig);
 
           // append agent tools
           if (agent.tools.size) {
