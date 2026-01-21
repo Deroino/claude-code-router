@@ -296,7 +296,9 @@ export const createServer = async (config: any): Promise<any> => {
         // Record failure statistics
         requestStatsService.recordFailure(provider, model, processedRequest, errorText, response.status);
 
-        reply.status(response.status).send({
+        // Always return 200 to avoid triggering frontend auth redirect
+        // Include the original provider status in the response
+        reply.status(200).send({
           success: false,
           status: response.status,
           error: errorData
@@ -308,8 +310,10 @@ export const createServer = async (config: any): Promise<any> => {
       if (error.name === 'AbortError') {
         // Record failure statistics for timeout
         requestStatsService.recordFailure(req.body.provider, req.body.model, req.body, "Request timeout (10 seconds)", 504);
-        reply.status(504).send({
+        // Always return 200 to avoid triggering frontend auth redirect
+        reply.status(200).send({
           success: false,
+          status: 504,
           error: "Request timeout (10 seconds)"
         });
         return;
@@ -333,8 +337,10 @@ export const createServer = async (config: any): Promise<any> => {
       // Record failure statistics for other errors
       requestStatsService.recordFailure(req.body.provider, req.body.model, req.body, errorDetail, 500);
 
-      reply.status(500).send({
+      // Always return 200 to avoid triggering frontend auth redirect
+      reply.status(200).send({
         success: false,
+        status: 500,
         error: errorDetail
       });
       return;

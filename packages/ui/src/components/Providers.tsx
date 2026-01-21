@@ -700,20 +700,21 @@ export function Providers({
     setBatchTestResults(initialResults);
     setShowBatchTestDialog(true);
 
-    // Test each model sequentially
-    for (let i = 0; i < models.length; i++) {
-      const model = models[i];
+    // Test all models in parallel
+    const testPromises = models.map(async (model, index) => {
+      // Update status to testing
       setBatchTestResults(prev => {
         const updated = [...prev];
-        updated[i] = { ...updated[i], status: "testing", timestamp: Date.now() };
+        updated[index] = { ...updated[index], status: "testing", timestamp: Date.now() };
         return updated;
       });
 
       try {
         const result = await api.testModel(providerName, model, config?.TEST_PROMPT);
+        // Update status to success or error
         setBatchTestResults(prev => {
           const updated = [...prev];
-          updated[i] = {
+          updated[index] = {
             provider: providerName,
             model,
             status: result?.success ? "success" : "error",
@@ -723,11 +724,13 @@ export function Providers({
           };
           return updated;
         });
+        return { index, success: true };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : "Unknown error";
+        // Update status to error
         setBatchTestResults(prev => {
           const updated = [...prev];
-          updated[i] = {
+          updated[index] = {
             provider: providerName,
             model,
             status: "error",
@@ -736,8 +739,12 @@ export function Providers({
           };
           return updated;
         });
+        return { index, success: false };
       }
-    }
+    });
+
+    // Wait for all tests to complete
+    await Promise.all(testPromises);
   };
 
   const handleBatchTestAll = async () => {
@@ -765,20 +772,21 @@ export function Providers({
     setBatchTestResults(initialResults);
     setShowBatchTestDialog(true);
 
-    // Test each model sequentially
-    for (let i = 0; i < allTests.length; i++) {
-      const { provider, model } = allTests[i];
+    // Test all models in parallel
+    const testPromises = allTests.map(async ({ provider, model }, index) => {
+      // Update status to testing
       setBatchTestResults(prev => {
         const updated = [...prev];
-        updated[i] = { ...updated[i], status: "testing", timestamp: Date.now() };
+        updated[index] = { ...updated[index], status: "testing", timestamp: Date.now() };
         return updated;
       });
 
       try {
         const result = await api.testModel(provider, model, config?.TEST_PROMPT);
+        // Update status to success or error
         setBatchTestResults(prev => {
           const updated = [...prev];
-          updated[i] = {
+          updated[index] = {
             provider,
             model,
             status: result?.success ? "success" : "error",
@@ -788,11 +796,13 @@ export function Providers({
           };
           return updated;
         });
+        return { index, success: true };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : "Unknown error";
+        // Update status to error
         setBatchTestResults(prev => {
           const updated = [...prev];
-          updated[i] = {
+          updated[index] = {
             provider,
             model,
             status: "error",
@@ -801,8 +811,12 @@ export function Providers({
           };
           return updated;
         });
+        return { index, success: false };
       }
-    }
+    });
+
+    // Wait for all tests to complete
+    await Promise.all(testPromises);
   };
 
   // Filter providers based on search term

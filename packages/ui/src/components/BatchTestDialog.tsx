@@ -225,11 +225,13 @@ export function BatchTestDialog({
                     <td className="p-3">
                       <div className="space-y-1">
                         {result.message && (
-                          <div className="text-xs text-gray-600">{result.message}</div>
+                          <div className="text-xs text-gray-600">
+                            {typeof result.message === 'string' ? result.message : JSON.stringify(result.message)}
+                          </div>
                         )}
                         {result.response && (
-                          <div className="text-xs text-gray-500 max-w-md truncate" title={result.response}>
-                            {result.response}
+                          <div className="text-xs text-gray-500 max-w-md truncate" title={typeof result.response === 'string' ? result.response : JSON.stringify(result.response)}>
+                            {typeof result.response === 'string' ? result.response : JSON.stringify(result.response)}
                           </div>
                         )}
                         {result.timestamp && (

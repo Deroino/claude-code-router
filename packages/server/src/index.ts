@@ -170,10 +170,12 @@ async function getServer(options: RunOptions = {}) {
   const serverInstance = await createServer({
     jsonPath: CONFIG_FILE,
     initialConfig: {
-      // ...config,
-      providers: config.Providers || config.providers,
+      // Preserve critical config that should persist during reload
+      noAuth: config.noAuth,
+      APIKEY: config.APIKEY,
       HOST: HOST,
       PORT: servicePort,
+      providers: config.Providers || config.providers,
       LOG_FILE: join(
         homedir(),
         ".claude-code-router",
