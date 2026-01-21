@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { X, Trash2, Plus, Eye, EyeOff, Search, XCircle } from "lucide-react";
+import { X, Trash2, Plus, Eye, EyeOff, Search, XCircle, Play } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Combobox } from "@/components/ui/combobox";
 import { ComboInput } from "@/components/ui/combo-input";
@@ -23,6 +23,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import type { Provider } from "@/types";
+import { BatchTestDialog } from "./BatchTestDialog";
+import type { BatchTestResult } from "./BatchTestDialog";
 
 // Model data from /v1/models endpoint
 interface ModelData {
@@ -69,6 +71,10 @@ export function Providers({
   const [showModelSelectDialog, setShowModelSelectDialog] = useState<boolean>(false);
   const [modelFetchError, setModelFetchError] = useState<string | null>(null);
   const [modelSearchTerm, setModelSearchTerm] = useState<string>("");
+
+  // Batch test state
+  const [showBatchTestDialog, setShowBatchTestDialog] = useState<boolean>(false);
+  const [batchTestResults, setBatchTestResults] = useState<BatchTestResult[]>([]);
 
   // Get request statistics
   const { stats: requestStats } = useRequestStats();
@@ -683,6 +689,122 @@ export function Providers({
 
   const editingProvider = editingProviderData || (editingProviderIndex !== null ? validProviders[editingProviderIndex] : null);
 
+  // Batch test handlers
+  const handleBatchTestProvider = async (providerName: string, models: string[]) => {
+    // Initialize results with pending status
+    const initialResults: BatchTestResult[] = models.map(model => ({
+      provider: providerName,
+      model,
+      status: "pending",
+    }));
+    setBatchTestResults(initialResults);
+    setShowBatchTestDialog(true);
+
+    // Test each model sequentially
+    for (let i = 0; i < models.length; i++) {
+      const model = models[i];
+      setBatchTestResults(prev => {
+        const updated = [...prev];
+        updated[i] = { ...updated[i], status: "testing", timestamp: Date.now() };
+        return updated;
+      });
+
+      try {
+        const result = await api.testModel(providerName, model, config?.TEST_PROMPT);
+        setBatchTestResults(prev => {
+          const updated = [...prev];
+          updated[i] = {
+            provider: providerName,
+            model,
+            status: result?.success ? "success" : "error",
+            message: result?.error || undefined,
+            response: result?.response || undefined,
+            timestamp: Date.now(),
+          };
+          return updated;
+        });
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : "Unknown error";
+        setBatchTestResults(prev => {
+          const updated = [...prev];
+          updated[i] = {
+            provider: providerName,
+            model,
+            status: "error",
+            message: errorMsg,
+            timestamp: Date.now(),
+          };
+          return updated;
+        });
+      }
+    }
+  };
+
+  const handleBatchTestAll = async () => {
+    // Collect all models from all providers
+    const allTests: Array<{ provider: string; model: string }> = [];
+    for (const provider of validProviders) {
+      if (provider.name && provider.models) {
+        for (const model of provider.models) {
+          allTests.push({ provider: provider.name, model });
+        }
+      }
+    }
+
+    if (allTests.length === 0) {
+      showToast("No models to test", "warning");
+      return;
+    }
+
+    // Initialize results with pending status
+    const initialResults: BatchTestResult[] = allTests.map(({ provider, model }) => ({
+      provider,
+      model,
+      status: "pending",
+    }));
+    setBatchTestResults(initialResults);
+    setShowBatchTestDialog(true);
+
+    // Test each model sequentially
+    for (let i = 0; i < allTests.length; i++) {
+      const { provider, model } = allTests[i];
+      setBatchTestResults(prev => {
+        const updated = [...prev];
+        updated[i] = { ...updated[i], status: "testing", timestamp: Date.now() };
+        return updated;
+      });
+
+      try {
+        const result = await api.testModel(provider, model, config?.TEST_PROMPT);
+        setBatchTestResults(prev => {
+          const updated = [...prev];
+          updated[i] = {
+            provider,
+            model,
+            status: result?.success ? "success" : "error",
+            message: result?.error || undefined,
+            response: result?.response || undefined,
+            timestamp: Date.now(),
+          };
+          return updated;
+        });
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : "Unknown error";
+        setBatchTestResults(prev => {
+          const updated = [...prev];
+          updated[i] = {
+            provider,
+            model,
+            status: "error",
+            message: errorMsg,
+            timestamp: Date.now(),
+          };
+          return updated;
+        });
+      }
+    }
+  };
+
   // Filter providers based on search term
   const filteredProviders = validProviders.filter(provider => {
     if (!searchTerm) return true;
@@ -708,7 +830,18 @@ export function Providers({
       <CardHeader className="flex flex-col border-b p-4 gap-3">
         <div className="flex flex-row items-center justify-between">
           <CardTitle className="text-lg">{t("providers.title")} <span className="text-sm font-normal text-gray-500">({filteredProviders.length}/{validProviders.length})</span></CardTitle>
-          <Button onClick={handleAddProvider}>{t("providers.add")}</Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleBatchTestAll}
+              className="gap-1 hover:bg-amber-50 hover:text-amber-700 hover:border-amber-300"
+            >
+              <Play className="h-4 w-4" />
+              Test All
+            </Button>
+            <Button onClick={handleAddProvider}>{t("providers.add")}</Button>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
@@ -742,6 +875,8 @@ export function Providers({
           testPrompt={config?.TEST_PROMPT}
           hoveredModel={hoveredModel}
           onBadgeRef={onBadgeRef}
+          searchTerm={searchTerm}
+          onBatchTestProvider={handleBatchTestProvider}
         />
       </CardContent>
 
@@ -1382,6 +1517,14 @@ export function Providers({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Batch Test Results Dialog */}
+      <BatchTestDialog
+        open={showBatchTestDialog}
+        onClose={() => setShowBatchTestDialog(false)}
+        results={batchTestResults}
+        title="Batch Test Results"
+      />
     </Card>
   );
 }
