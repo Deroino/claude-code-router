@@ -1,4 +1,4 @@
-import { Pencil, Trash2, Zap, Check, X, Play } from "lucide-react";
+import { Pencil, Trash2, Zap, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -18,7 +18,6 @@ interface ProviderListProps {
   hoveredModel?: { provider: string | null; model: string | null } | null;
   onBadgeRef?: (provider: string, model: string, ref: HTMLDivElement | null) => void;
   searchTerm?: string;
-  onBatchTestProvider?: (providerName: string, models: string[]) => void;
 }
 
 interface ModelBadgeProps {
@@ -256,7 +255,7 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
   );
 }
 
-export function ProviderList({ providers, onEdit, onRemove, showToast, removeToast, requestStats, hoveredModel, onBadgeRef, searchTerm = "", onBatchTestProvider }: ProviderListProps) {
+export function ProviderList({ providers, onEdit, onRemove, showToast, removeToast, requestStats, hoveredModel, onBadgeRef, searchTerm = "" }: ProviderListProps) {
   // Wrap the entire provider list with a single TooltipProvider to avoid multiple providers
   if (!providers || !Array.isArray(providers)) {
     return (
@@ -288,10 +287,27 @@ export function ProviderList({ providers, onEdit, onRemove, showToast, removeToa
           const providerName = provider.name || "Unnamed Provider";
           const apiBaseUrl = provider.api_base_url || "No API URL";
           const models = Array.isArray(provider.models) ? provider.models : [];
-          // Filter models based on search term
-          const filteredModels = searchTerm
-            ? models.filter(model => model.toLowerCase().includes(searchTerm.toLowerCase()))
-            : models;
+
+          // Determine if we should show all models based on match type
+          const searchTermLower = searchTerm ? searchTerm.toLowerCase() : "";
+          const isProviderMatch = searchTerm && (
+            providerName.toLowerCase().includes(searchTermLower) ||
+            apiBaseUrl.toLowerCase().includes(searchTermLower)
+          );
+
+          // If provider matches, show all models. Otherwise filter models by name.
+          const filteredModels = isProviderMatch
+            ? models
+            : searchTermLower
+              ? models.filter(model => model.toLowerCase().includes(searchTermLower))
+              : models;
+
+          // If searching but no models match and not a provider match, don't show this provider
+          // (This logic might be redundant if the parent component already filters,
+          // but good for safety if used independently)
+          if (searchTerm && !isProviderMatch && filteredModels.length === 0) {
+            return null;
+          }
 
           return (
             <div key={index} className="flex items-start justify-between rounded-md border bg-white p-4 transition-all hover:shadow-md animate-slide-in hover:scale-[1.005]">
@@ -301,24 +317,6 @@ export function ProviderList({ providers, onEdit, onRemove, showToast, removeToa
                     <p className="text-md font-semibold text-gray-800">{providerName}</p>
                     <p className="text-xs text-gray-400 font-mono">{apiBaseUrl}</p>
                   </div>
-                  {onBatchTestProvider && filteredModels.length > 0 && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => onBatchTestProvider(providerName, filteredModels)}
-                          className="h-7 px-2 text-xs gap-1 hover:bg-amber-50 hover:text-amber-700"
-                        >
-                          <Play className="h-3 w-3" />
-                          Test All ({filteredModels.length})
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Test all models in this provider</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  )}
                 </div>
 
                 <div className="flex flex-wrap gap-2 pt-1">

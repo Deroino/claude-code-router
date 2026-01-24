@@ -75,6 +75,30 @@ export function Providers({
   // Batch test state
   const [showBatchTestDialog, setShowBatchTestDialog] = useState<boolean>(false);
   const [batchTestResults, setBatchTestResults] = useState<BatchTestResult[]>([]);
+  const [isBatchTesting, setIsBatchTesting] = useState<boolean>(false);
+
+  // Load results from localStorage on mount
+  useEffect(() => {
+    try {
+      const savedResults = localStorage.getItem('batchTestResults');
+      if (savedResults) {
+        setBatchTestResults(JSON.parse(savedResults));
+      }
+    } catch (e) {
+      console.error('Failed to load batch test results:', e);
+    }
+  }, []);
+
+  // Save results to localStorage whenever they change
+  useEffect(() => {
+    try {
+      if (batchTestResults.length > 0) {
+        localStorage.setItem('batchTestResults', JSON.stringify(batchTestResults));
+      }
+    } catch (e) {
+      console.error('Failed to save batch test results:', e);
+    }
+  }, [batchTestResults]);
 
   // Get request statistics
   const { stats: requestStats } = useRequestStats();
@@ -690,61 +714,74 @@ export function Providers({
   const editingProvider = editingProviderData || (editingProviderIndex !== null ? validProviders[editingProviderIndex] : null);
 
   // Batch test handlers
-  const handleBatchTestProvider = async (providerName: string, models: string[]) => {
-    // Initialize results with pending status
-    const initialResults: BatchTestResult[] = models.map(model => ({
-      provider: providerName,
-      model,
-      status: "pending",
-    }));
-    setBatchTestResults(initialResults);
-    setShowBatchTestDialog(true);
+  const handleRunBatchTests = async (selectedTests: BatchTestResult[]) => {
+    if (selectedTests.length === 0) return;
 
-    // Test all models in parallel
-    const testPromises = models.map(async (model, index) => {
+    setIsBatchTesting(true);
+
+    // Create a map for quick lookup of index in main array
+    const testIndices = new Map<string, number>();
+    batchTestResults.forEach((r, idx) => {
+      testIndices.set(`${r.provider}-${r.model}`, idx);
+    });
+
+    // Test selected models in parallel
+    const testPromises = selectedTests.map(async (testItem) => {
+      const { provider, model } = testItem;
+      const index = testIndices.get(`${provider}-${model}`);
+
+      if (index === undefined) return { success: false };
+
       // Update status to testing
       setBatchTestResults(prev => {
         const updated = [...prev];
-        updated[index] = { ...updated[index], status: "testing", timestamp: Date.now() };
+        if (updated[index]) {
+          updated[index] = { ...updated[index], status: "testing", timestamp: Date.now() };
+        }
         return updated;
       });
 
       try {
-        const result = await api.testModel(providerName, model, config?.TEST_PROMPT);
+        const result = await api.testModel(provider, model, config?.TEST_PROMPT);
         // Update status to success or error
         setBatchTestResults(prev => {
           const updated = [...prev];
-          updated[index] = {
-            provider: providerName,
-            model,
-            status: result?.success ? "success" : "error",
-            message: result?.error || undefined,
-            response: result?.response || undefined,
-            timestamp: Date.now(),
-          };
+          if (updated[index]) {
+            updated[index] = {
+              provider,
+              model,
+              status: result?.success ? "success" : "error",
+              message: result?.error || undefined,
+              response: result?.response || undefined,
+              timestamp: Date.now(),
+            };
+          }
           return updated;
         });
-        return { index, success: true };
+        return { success: true };
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : "Unknown error";
         // Update status to error
         setBatchTestResults(prev => {
           const updated = [...prev];
-          updated[index] = {
-            provider: providerName,
-            model,
-            status: "error",
-            message: errorMsg,
-            timestamp: Date.now(),
-          };
+          if (updated[index]) {
+            updated[index] = {
+              provider,
+              model,
+              status: "error",
+              message: errorMsg,
+              timestamp: Date.now(),
+            };
+          }
           return updated;
         });
-        return { index, success: false };
+        return { success: false };
       }
     });
 
     // Wait for all tests to complete
     await Promise.all(testPromises);
+    setIsBatchTesting(false);
   };
 
   const handleBatchTestAll = async () => {
@@ -763,60 +800,31 @@ export function Providers({
       return;
     }
 
-    // Initialize results with pending status
-    const initialResults: BatchTestResult[] = allTests.map(({ provider, model }) => ({
-      provider,
-      model,
-      status: "pending",
-    }));
-    setBatchTestResults(initialResults);
-    setShowBatchTestDialog(true);
+    // Merge with existing results to preserve history
+    const existingMap = new Map<string, BatchTestResult>();
+    batchTestResults.forEach(r => {
+      existingMap.set(`${r.provider}-${r.model}`, r);
+    });
 
-    // Test all models in parallel
-    const testPromises = allTests.map(async ({ provider, model }, index) => {
-      // Update status to testing
-      setBatchTestResults(prev => {
-        const updated = [...prev];
-        updated[index] = { ...updated[index], status: "testing", timestamp: Date.now() };
-        return updated;
-      });
+    const newResults: BatchTestResult[] = [];
 
-      try {
-        const result = await api.testModel(provider, model, config?.TEST_PROMPT);
-        // Update status to success or error
-        setBatchTestResults(prev => {
-          const updated = [...prev];
-          updated[index] = {
-            provider,
-            model,
-            status: result?.success ? "success" : "error",
-            message: result?.error || undefined,
-            response: result?.response || undefined,
-            timestamp: Date.now(),
-          };
-          return updated;
+    // Add all current models, preserving existing results if available
+    allTests.forEach(({ provider, model }) => {
+      const key = `${provider}-${model}`;
+      if (existingMap.has(key)) {
+        newResults.push(existingMap.get(key)!);
+      } else {
+        newResults.push({
+          provider,
+          model,
+          status: "idle",
         });
-        return { index, success: true };
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : "Unknown error";
-        // Update status to error
-        setBatchTestResults(prev => {
-          const updated = [...prev];
-          updated[index] = {
-            provider,
-            model,
-            status: "error",
-            message: errorMsg,
-            timestamp: Date.now(),
-          };
-          return updated;
-        });
-        return { index, success: false };
       }
     });
 
-    // Wait for all tests to complete
-    await Promise.all(testPromises);
+    setBatchTestResults(newResults);
+    setShowBatchTestDialog(true);
+    // Don't auto-start, let user select and run
   };
 
   // Filter providers based on search term
@@ -832,11 +840,26 @@ export function Providers({
     }
     // Check models
     if (provider.models && Array.isArray(provider.models)) {
-      return provider.models.some(model => 
+      return provider.models.some(model =>
         model && model.toLowerCase().includes(term)
       );
     }
     return false;
+  });
+
+  // Sort providers by total success count (descending)
+  const sortedProviders = [...filteredProviders].sort((a, b) => {
+    const aTotal = (a.models || []).reduce((sum, model) => {
+      const stats = requestStats?.find(s => s.provider === a.name && s.model === model);
+      return sum + (stats?.success || 0);
+    }, 0);
+
+    const bTotal = (b.models || []).reduce((sum, model) => {
+      const stats = requestStats?.find(s => s.provider === b.name && s.model === model);
+      return sum + (stats?.success || 0);
+    }, 0);
+
+    return bTotal - aTotal; // Descending order
   });
 
   return (
@@ -880,7 +903,7 @@ export function Providers({
       </CardHeader>
       <CardContent className="flex-grow overflow-y-auto p-4">
         <ProviderList
-          providers={filteredProviders}
+          providers={sortedProviders}
           onEdit={handleEditProvider}
           onRemove={handleSetDeletingProviderIndex}
           showToast={showToast}
@@ -890,7 +913,6 @@ export function Providers({
           hoveredModel={hoveredModel}
           onBadgeRef={onBadgeRef}
           searchTerm={searchTerm}
-          onBatchTestProvider={handleBatchTestProvider}
         />
       </CardContent>
 
@@ -1538,6 +1560,8 @@ export function Providers({
         onClose={() => setShowBatchTestDialog(false)}
         results={batchTestResults}
         title="Batch Test Results"
+        onRunTests={handleRunBatchTests}
+        isRunning={isBatchTesting}
       />
     </Card>
   );

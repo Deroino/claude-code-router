@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -7,13 +7,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Check, X, Copy, Download, Filter } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Check, X, Copy, Download, Filter, Search, XCircle, Play } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 
 export interface BatchTestResult {
   provider: string;
   model: string;
-  status: "success" | "error" | "pending" | "testing";
+  status: "success" | "error" | "pending" | "testing" | "idle";
   message?: string;
   response?: string;
   timestamp?: number;
@@ -24,20 +26,56 @@ interface BatchTestDialogProps {
   onClose: () => void;
   results: BatchTestResult[];
   title?: string;
+  onRunTests?: (selectedTests: BatchTestResult[]) => void;
+  isRunning?: boolean;
 }
 
 export function BatchTestDialog({
   open,
   onClose,
   results,
-  title = "Batch Test Results"
+  title = "Batch Test Results",
+  onRunTests,
+  isRunning = false
 }: BatchTestDialogProps) {
-  const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "testing">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "testing" | "idle">("all");
+  const [searchTerm, setSearchTerm] = useState<string>("");
+  const [selectedTests, setSelectedTests] = useState<Set<string>>(new Set());
 
-  const filteredResults = results.filter(r => {
-    if (statusFilter === "all") return true;
-    if (statusFilter === "testing") return r.status === "testing" || r.status === "pending";
-    return r.status === statusFilter;
+  // Initialize selected tests when results change
+  useEffect(() => {
+    if (open && results.length > 0) {
+      // By default select all idle or pending tests
+      const initialSelection = new Set<string>();
+      results.forEach((r, index) => {
+        const id = `${r.provider}-${r.model}-${index}`;
+        initialSelection.add(id);
+      });
+      setSelectedTests(initialSelection);
+    }
+  }, [open, results.length]);
+
+  const filteredResults = results.map((r, index) => ({...r, id: `${r.provider}-${r.model}-${index}`})).filter(r => {
+    // Apply status filter
+    if (statusFilter === "all") {
+      // pass
+    } else if (statusFilter === "testing") {
+      if (r.status !== "testing" && r.status !== "pending") return false;
+    } else {
+      if (r.status !== statusFilter) return false;
+    }
+
+    // Apply search filter
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      const providerMatch = r.provider && r.provider.toLowerCase().includes(term);
+      const modelMatch = r.model && r.model.toLowerCase().includes(term);
+      const messageMatch = r.message && typeof r.message === 'string' && r.message.toLowerCase().includes(term);
+      const responseMatch = r.response && typeof r.response === 'string' && r.response.toLowerCase().includes(term);
+      if (!providerMatch && !modelMatch && !messageMatch && !responseMatch) return false;
+    }
+
+    return true;
   });
 
   const successCount = results.filter(r => r.status === "success").length;
@@ -48,7 +86,8 @@ export function BatchTestDialog({
     const text = filteredResults.map(r => {
       const statusIcon = r.status === "success" ? "✓" : r.status === "error" ? "✗" : r.status === "testing" ? "⟳" : "?";
       const message = r.message ? ` - ${r.message}` : "";
-      const response = r.response ? `\n  Response: ${r.response}` : "";
+      const response = r.response ? `
+  Response: ${r.response}` : "";
       return `${statusIcon} ${r.provider}/${r.model}${message}${response}`;
     }).join("\n");
     navigator.clipboard.writeText(text);
@@ -72,11 +111,42 @@ export function BatchTestDialog({
     URL.revokeObjectURL(url);
   };
 
-  const isRunning = testingCount > 0;
+  const toggleSelection = (id: string) => {
+    setSelectedTests(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleAllSelection = () => {
+    if (selectedTests.size === filteredResults.length) {
+      setSelectedTests(new Set());
+    } else {
+      const next = new Set<string>();
+      filteredResults.forEach(r => next.add(r.id));
+      setSelectedTests(next);
+    }
+  };
+
+  const handleRunSelectedTests = () => {
+    if (onRunTests) {
+      const selected = results.filter((_, index) => {
+        const r = results[index];
+        const id = `${r.provider}-${r.model}-${index}`;
+        return selectedTests.has(id);
+      });
+      onRunTests(selected);
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-h-[80vh] flex flex-col sm:max-w-4xl">
+      <DialogContent className="max-h-[80vh] flex flex-col sm:max-w-5xl">
         <DialogHeader>
           <DialogTitle className="flex items-center justify-between">
             <span>{title}</span>
@@ -88,74 +158,57 @@ export function BatchTestDialog({
           </DialogTitle>
         </DialogHeader>
 
-        {/* Summary */}
-        <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-md border">
+        {/* Filter and Actions */}
+        <div className="flex flex-wrap items-center gap-2 justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">Total:</span>
-            <Badge variant="outline">{results.length}</Badge>
-          </div>
-          <div className="flex items-center gap-2">
-            <Check className="h-4 w-4 text-emerald-500" />
-            <span className="text-sm font-medium">Success:</span>
-            <Badge variant="outline" className="text-emerald-600 border-emerald-200">
-              {successCount}
-            </Badge>
-          </div>
-          <div className="flex items-center gap-2">
-            <X className="h-4 w-4 text-rose-500" />
-            <span className="text-sm font-medium">Failed:</span>
-            <Badge variant="outline" className="text-rose-600 border-rose-200">
-              {errorCount}
-            </Badge>
-          </div>
-          {isRunning && (
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium">Testing:</span>
-              <Badge variant="outline" className="text-amber-600 border-amber-200">
-                {testingCount}
-              </Badge>
-            </div>
-          )}
-        </div>
-
-        {/* Filter */}
-        <div className="flex items-center gap-2">
-          <Filter className="h-4 w-4 text-gray-500" />
-          <div className="flex gap-2">
-            <Button
-              variant={statusFilter === "all" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setStatusFilter("all")}
-            >
-              All ({results.length})
-            </Button>
-            <Button
-              variant={statusFilter === "success" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setStatusFilter("success")}
-            >
-              <Check className="h-3 w-3 mr-1" />
-              Success ({successCount})
-            </Button>
-            <Button
-              variant={statusFilter === "error" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setStatusFilter("error")}
-            >
-              <X className="h-3 w-3 mr-1" />
-              Failed ({errorCount})
-            </Button>
-            {isRunning && (
+            <Filter className="h-4 w-4 text-gray-500" />
+            <div className="flex gap-2">
               <Button
-                variant={statusFilter === "testing" ? "default" : "outline"}
+                variant={statusFilter === "all" ? "default" : "outline"}
                 size="sm"
-                onClick={() => setStatusFilter("testing")}
+                onClick={() => setStatusFilter("all")}
               >
-                Testing ({testingCount})
+                All ({results.length})
               </Button>
-            )}
+              <Button
+                variant={statusFilter === "success" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setStatusFilter("success")}
+              >
+                <Check className="h-3 w-3 mr-1" />
+                Success ({successCount})
+              </Button>
+              <Button
+                variant={statusFilter === "error" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setStatusFilter("error")}
+              >
+                <X className="h-3 w-3 mr-1" />
+                Failed ({errorCount})
+              </Button>
+            </div>
           </div>
-          <div className="ml-auto flex gap-2">
+
+          <div className="flex gap-2 items-center">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
+              <Input
+                placeholder="Search..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-8 w-48"
+              />
+              {searchTerm && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6"
+                  onClick={() => setSearchTerm("")}
+                >
+                  <XCircle className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
             <Button
               variant="outline"
               size="sm"
@@ -178,27 +231,44 @@ export function BatchTestDialog({
         {/* Results Table */}
         <div className="flex-grow overflow-y-auto border rounded-md">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 sticky top-0">
+            <thead className="bg-gray-50 sticky top-0 z-10">
               <tr>
-                <th className="text-left p-3 font-medium border-b">Provider</th>
-                <th className="text-left p-3 font-medium border-b">Model</th>
-                <th className="text-left p-3 font-medium border-b">Status</th>
+                <th className="w-10 p-3 border-b text-center whitespace-nowrap">
+                  <Checkbox
+                    checked={selectedTests.size > 0 && selectedTests.size === filteredResults.length}
+                    onCheckedChange={toggleAllSelection}
+                    aria-label="Select all"
+                  />
+                </th>
+                <th className="text-left p-3 font-medium border-b whitespace-nowrap">Provider</th>
+                <th className="text-left p-3 font-medium border-b whitespace-nowrap">Model</th>
+                <th className="text-left p-3 font-medium border-b whitespace-nowrap">Status</th>
                 <th className="text-left p-3 font-medium border-b">Details</th>
               </tr>
             </thead>
             <tbody>
               {filteredResults.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="text-center p-8 text-gray-500">
+                  <td colSpan={5} className="text-center p-8 text-gray-500">
                     No results to display
                   </td>
                 </tr>
               ) : (
-                filteredResults.map((result, index) => (
-                  <tr key={`${result.provider}-${result.model}-${index}`} className="border-b hover:bg-gray-50">
-                    <td className="p-3 font-medium">{result.provider}</td>
-                    <td className="p-3 font-mono text-xs">{result.model}</td>
-                    <td className="p-3">
+                filteredResults.map((result) => (
+                  <tr
+                    key={result.id}
+                    className={`border-b hover:bg-gray-50 ${selectedTests.has(result.id) ? 'bg-blue-50/50' : ''}`}
+                    onClick={() => toggleSelection(result.id)}
+                  >
+                    <td className="p-3 text-center whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={selectedTests.has(result.id)}
+                        onCheckedChange={() => toggleSelection(result.id)}
+                      />
+                    </td>
+                    <td className="p-3 font-medium whitespace-nowrap">{result.provider}</td>
+                    <td className="p-3 font-mono text-xs whitespace-nowrap">{result.model}</td>
+                    <td className="p-3 whitespace-nowrap">
                       {result.status === "success" && (
                         <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">
                           <Check className="h-3 w-3 mr-1" />
@@ -221,8 +291,13 @@ export function BatchTestDialog({
                           Pending
                         </Badge>
                       )}
+                      {result.status === "idle" && (
+                        <Badge variant="outline" className="text-gray-500 border-gray-200">
+                          Idle
+                        </Badge>
+                      )}
                     </td>
-                    <td className="p-3">
+                    <td className="p-3 min-w-[300px]">
                       <div className="space-y-1">
                         {result.message && (
                           <div className="text-xs text-gray-600">
@@ -248,10 +323,25 @@ export function BatchTestDialog({
           </table>
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            Close
-          </Button>
+        <DialogFooter className="flex justify-between sm:justify-between items-center">
+          <div className="text-sm text-gray-500">
+            {selectedTests.size} selected
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={onClose}>
+              Close
+            </Button>
+            {onRunTests && (
+              <Button
+                onClick={handleRunSelectedTests}
+                disabled={selectedTests.size === 0 || isRunning}
+                className="gap-2"
+              >
+                <Play className="h-4 w-4" />
+                Run Selected Tests
+              </Button>
+            )}
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
