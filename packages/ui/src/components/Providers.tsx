@@ -169,7 +169,15 @@ export function Providers({
 
   const handleEditProvider = (index: number) => {
     // Find the actual index in the original providers array
-    const actualIndex = validProviders.indexOf(filteredProviders[index]);
+    // Since providers are sorted in UI but not in config, we need to map the sorted provider back to original
+    const sortedProvider = sortedProviders[index];
+    const actualIndex = validProviders.indexOf(sortedProvider);
+
+    if (actualIndex === -1) {
+      console.error("Could not find provider in original list", sortedProvider);
+      return;
+    }
+
     const provider = config.Providers[actualIndex];
     setEditingProviderIndex(actualIndex);
     setEditingProviderData(JSON.parse(JSON.stringify(provider))); // 深拷贝
@@ -273,7 +281,15 @@ export function Providers({
   // Handle deletion by passing the filtered index to get the actual index in the original array
   const handleRemoveProvider = (filteredIndex: number) => {
     // Find the actual index in the original providers array
-    const actualIndex = validProviders.indexOf(filteredProviders[filteredIndex]);
+    // Since providers are sorted in UI but not in config, we need to map the sorted provider back to original
+    const sortedProvider = sortedProviders[filteredIndex];
+    const actualIndex = validProviders.indexOf(sortedProvider);
+
+    if (actualIndex === -1) {
+      console.error("Could not find provider in original list", sortedProvider);
+      return;
+    }
+
     const newProviders = [...config.Providers];
     newProviders.splice(actualIndex, 1);
     setConfig({ ...config, Providers: newProviders });
