@@ -1050,7 +1050,7 @@ export const createServer = async (config: any): Promise<any> => {
 
     // Listen for updates
     statsListener = (update: any) => {
-      send(`data: ${JSON.stringify({
+      const data = {
         type: 'update',
         data: {
           key: update.key,
@@ -1059,7 +1059,9 @@ export const createServer = async (config: any): Promise<any> => {
           ...update.stats
         },
         timestamp: Date.now()
-      })}\n\n`);
+      };
+      console.log('[SSE] Sending stats update:', JSON.stringify(data, null, 2));
+      send(`data: ${JSON.stringify(data)}\n\n`);
     };
 
     // Listen for clear events

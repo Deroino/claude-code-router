@@ -29,10 +29,12 @@ export function useRequestStats() {
     es.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
+        console.log('[SSE] Received message:', message);
 
         if (message.type === 'initial') {
           setStats(message.data || []);
         } else if (message.type === 'update') {
+          console.log('[SSE] Update stats:', message.data);
           setStats(prev => {
             const index = prev.findIndex(s => s.key === message.data.key);
             if (index >= 0) {

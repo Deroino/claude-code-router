@@ -20,6 +20,16 @@ interface ProviderListProps {
   searchTerm?: string;
 }
 
+// Extract base domain from URL (protocol + hostname + port only)
+function extractDomain(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    return `${urlObj.protocol}//${urlObj.hostname}${urlObj.port ? ':' + urlObj.port : ''}`;
+  } catch {
+    return url;
+  }
+}
+
 interface ModelBadgeProps {
   providerName: string;
   model: string;
@@ -47,6 +57,14 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
   const successCount = stats?.success || 0;
   const failCount = stats?.fail || 0;
   const lastRequest = stats?.lastRequest;
+
+  // Determine badge background color based on last request result
+  const getBadgeBackgroundClass = () => {
+    if (!lastRequest) return 'bg-white';
+    // Debug: check if error exists
+    console.log('Badge color check:', { provider: providerName, model, lastRequest });
+    return lastRequest.error ? 'bg-red-200' : 'bg-green-200';
+  };
 
   const handleCopy = async () => {
     const textToCopy = `${providerName},${model}`;
@@ -128,33 +146,22 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
     <Badge
       ref={badgeRef}
       variant="outline"
-      className={`flex flex-col items-stretch h-auto py-1 px-2 gap-0.5 transition-all duration-200 hover:scale-105 cursor-pointer bg-white hover:bg-gray-50/80 shadow-sm hover:shadow border-gray-200 w-fit max-w-full ${isHovered ? 'ring-2 ring-blue-500 ring-offset-2 bg-blue-50 border-blue-300' : ''}`}
+      className={`flex flex-row items-center h-auto py-1 px-2 gap-2 transition-all duration-200 hover:scale-105 cursor-pointer shadow-sm hover:shadow border-gray-200 w-fit max-w-full ${getBadgeBackgroundClass()} hover:bg-opacity-90 ${isHovered ? 'ring-2 ring-blue-500 ring-offset-2 border-blue-300' : ''}`}
       onClick={handleCopy}
     >
-      {/* First Row: Model Name + Test Button */}
-      <div className="flex items-center justify-between gap-2 border-b border-gray-100 pb-0.5 border-dashed">
-        <span className="font-medium text-gray-700 text-xs break-all" title={model}>
-          {model || "Unnamed Model"}
-        </span>
-        <span
-          className={`p-0.5 rounded-full hover:bg-gray-100 transition-colors flex-shrink-0 ${isTesting ? 'animate-pulse' : ''}`}
-          title="Test availability"
-          onClick={handleTest}
-        >
-          <Zap className={`h-3 w-3 ${isTesting ? 'text-gray-400' : 'text-amber-500 fill-amber-500'}`} />
-        </span>
-      </div>
+      {/* Model Name */}
+      <span className="font-medium text-gray-700 text-xs break-all flex-1 min-w-0" title={model}>
+        {model || "Unnamed Model"}
+      </span>
 
-      {/* Second Row: Stats (with hover tooltip) */}
-      <div className="flex items-center w-full text-[9px] leading-none font-medium text-gray-400">
+      {/* Stats */}
+      <div className="flex items-center gap-1 text-[10px] leading-none font-semibold text-gray-500">
         {/* Success Count */}
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="flex-1 flex justify-center items-center cursor-help hover:bg-green-50 transition-colors rounded">
-              <span className="flex items-center gap-0.5 px-1 py-0.5 rounded-sm">
-                <Check className="h-2.5 w-2.5 text-emerald-500" />
-                <span className="text-emerald-600">{successCount}</span>
-              </span>
+            <div className="flex items-center gap-0.5 px-1 py-0.5 rounded-sm cursor-help hover:bg-green-50 transition-colors">
+              <Check className="h-3 w-3 text-emerald-500" />
+              <span className="text-emerald-600">{successCount}</span>
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom" align="start" className="max-w-2xl max-h-[500px] overflow-y-auto z-[99999] bg-white/95 backdrop-blur-sm border border-gray-200 shadow-2xl text-gray-900">
@@ -198,16 +205,12 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
           </TooltipContent>
         </Tooltip>
 
-        <span className="w-px h-2 bg-gray-200 flex-shrink-0"></span>
-
         {/* Fail Count */}
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="flex-1 flex justify-center items-center cursor-help hover:bg-red-50 transition-colors rounded">
-              <span className="flex items-center gap-0.5 px-1 py-0.5 rounded-sm">
-                <X className="h-2.5 w-2.5 text-rose-500" />
-                <span className="text-rose-600">{failCount}</span>
-              </span>
+            <div className="flex items-center gap-0.5 px-1 py-0.5 rounded-sm cursor-help hover:bg-red-50 transition-colors">
+              <X className="h-3 w-3 text-rose-500" />
+              <span className="text-rose-600">{failCount}</span>
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom" align="start" className="max-w-2xl max-h-[500px] overflow-y-auto z-[99999] bg-white/95 backdrop-blur-sm border border-gray-200 shadow-2xl text-gray-900">
@@ -251,6 +254,15 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
           </TooltipContent>
         </Tooltip>
       </div>
+
+      {/* Test Button - Right Side */}
+      <span
+        className={`p-1 rounded-full hover:bg-gray-100 transition-colors flex-shrink-0 ${isTesting ? 'animate-pulse' : ''}`}
+        title="Test availability"
+        onClick={handleTest}
+      >
+        <Zap className={`h-4 w-4 ${isTesting ? 'text-gray-400' : 'text-amber-500 fill-amber-500'}`} />
+      </span>
     </Badge>
   );
 }
@@ -314,7 +326,14 @@ export function ProviderList({ providers, onEdit, onRemove, showToast, removeToa
               <div className="flex-1 space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <p className="text-md font-semibold text-gray-800">{providerName}</p>
+                    <a
+                      href={extractDomain(apiBaseUrl)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-md font-semibold text-gray-800 hover:text-blue-600 hover:underline cursor-pointer transition-colors"
+                    >
+                      {providerName}
+                    </a>
                     <p className="text-xs text-gray-400 font-mono">{apiBaseUrl}</p>
                   </div>
                 </div>
