@@ -106,9 +106,28 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
       } else if (result?.success) {
         showToast(`"${textToTest}" test OK`, 'success');
       } else {
-        // Display error message from backend response
-        const errorMsg = result?.error || 'Unknown error';
-        showToast(`"${textToTest}" test failed: ${errorMsg}`, 'error', 5000);
+        // Display error message from backend response with full details
+        // Keep as is for toast to avoid overflow, don't format
+        let errorMsg = result?.error || 'Unknown error';
+
+        // If error is an object, stringify without formatting for toast
+        if (typeof errorMsg === 'object') {
+          try {
+            errorMsg = JSON.stringify(errorMsg);
+          } catch {
+            errorMsg = String(errorMsg);
+          }
+        }
+
+        // Add rawResponse and debug info if available (non-formatted)
+        if (result?.rawResponse) {
+          errorMsg += ` | Raw Response: ${JSON.stringify(result.rawResponse)}`;
+        }
+        if (result?.debug) {
+          errorMsg += ` | Debug: ${JSON.stringify(result.debug)}`;
+        }
+
+        showToast(`"${textToTest}" test failed: ${errorMsg}`, 'error', 10000);
       }
     } catch (err) {
       console.error('Model test failed: ', err);
@@ -243,7 +262,28 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
                       onClick={(e) => handleCopyContent(lastRequest.error, 'Error', e)}
                       title="Click to copy error"
                     >
-                      {lastRequest.error}
+                      {(() => {
+                        const error = lastRequest.error;
+                        // If error is an object, stringify with formatting
+                        if (typeof error === 'object') {
+                          try {
+                            return JSON.stringify(error, null, 2);
+                          } catch {
+                            return String(error);
+                          }
+                        }
+                        // If error is a string, try to parse as JSON then re-stringify for formatting
+                        if (typeof error === 'string') {
+                          try {
+                            const parsed = JSON.parse(error);
+                            return JSON.stringify(parsed, null, 2);
+                          } catch {
+                            // Not JSON, return as is
+                            return error;
+                          }
+                        }
+                        return String(error);
+                      })()}
                     </pre>
                   </div>
                 </div>
