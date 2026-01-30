@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { useConfig } from "@/components/ConfigProvider";
 import { api } from "@/lib/api";
 import { useModelMonitorLogs } from "@/hooks/useModelMonitorLogs";
+import { useRequestStats } from "@/hooks/useRequestStats";
 import {
   Settings,
   Languages,
@@ -70,6 +71,9 @@ function App() {
     isOpen: true,
     maxItems: 50
   });
+
+  // Get request statistics for model status display
+  const { stats: requestStats } = useRequestStats();
 
   // Handle hover on model from ModelMonitorPanel
   const handleHoverModel = useCallback((provider: string | null, model: string | null) => {
@@ -502,7 +506,7 @@ function App() {
           <div className="flex flex-1 flex-col gap-4 min-w-0 animate-slide-in">
             {showRouter && (
               <div className="flex-1 min-h-0">
-                <Router hoveredModel={hoveredModel} />
+                <Router hoveredModel={hoveredModel} onHoverModel={handleHoverModel} requestStats={requestStats} />
               </div>
             )}
             {showTransformers && (

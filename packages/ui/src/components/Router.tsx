@@ -4,12 +4,15 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { useConfig } from "./ConfigProvider";
 import { Combobox } from "./ui/combobox";
+import type { RequestStatsItem } from "@/hooks/useRequestStats";
 
 interface RouterProps {
   hoveredModel?: { provider: string | null; model: string | null };
+  onHoverModel?: (provider: string | null, model: string | null) => void;
+  requestStats?: RequestStatsItem[];
 }
 
-export function Router({ hoveredModel }: RouterProps) {
+export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps) {
   const { t } = useTranslation();
   const { config, setConfig } = useConfig();
 
@@ -50,9 +53,61 @@ export function Router({ hoveredModel }: RouterProps) {
     setConfig({ ...config, forceUseImageAgent: value });
   };
 
+  // Parse model value and trigger hover event
+  const handleLabelHover = (modelValue: string | undefined) => {
+    console.log('[Router] handleLabelHover called:', { modelValue, hasCallback: !!onHoverModel });
+    if (!onHoverModel) return;
+
+    if (modelValue && modelValue.includes(',')) {
+      const [provider, ...modelParts] = modelValue.split(',');
+      const model = modelParts.join(','); // Handle model names that might contain commas
+      console.log('[Router] Parsed:', { provider, model });
+      if (provider && model) {
+        onHoverModel(provider, model);
+        return;
+      }
+    }
+    onHoverModel(null, null);
+  };
+
+  const handleLabelLeave = () => {
+    if (onHoverModel) {
+      onHoverModel(null, null);
+    }
+  };
+
+  // Handle hover on combobox dropdown item
+  const handleComboboxItemHover = (modelValue: string | null) => {
+    console.log('[Router] handleComboboxItemHover called:', { modelValue, hasCallback: !!onHoverModel });
+    if (!onHoverModel) return;
+
+    if (modelValue && modelValue.includes(',')) {
+      const [provider, ...modelParts] = modelValue.split(',');
+      const model = modelParts.join(',');
+      console.log('[Router] Parsed combobox item:', { provider, model });
+      if (provider && model) {
+        onHoverModel(provider, model);
+        return;
+      }
+    }
+    onHoverModel(null, null);
+  };
+
   // Handle case where config.Providers might be null or undefined
   const providers = Array.isArray(config.Providers) ? config.Providers : [];
-  
+
+  // Helper function to get stats for a model
+  const getModelStats = (providerName: string, modelName: string) => {
+    return requestStats?.find(s => s.provider === providerName && s.model === modelName);
+  };
+
+  // Helper function to determine model status color
+  const getModelStatus = (providerName: string, modelName: string): 'success' | 'error' | 'neutral' => {
+    const stats = getModelStats(providerName, modelName);
+    if (!stats?.lastRequest) return 'neutral';
+    return stats.lastRequest.error ? 'error' : 'success';
+  };
+
   const modelOptions = providers.flatMap((provider) => {
     // Handle case where individual provider might be null or undefined
     if (!provider) return [];
@@ -63,11 +118,19 @@ export function Router({ hoveredModel }: RouterProps) {
     // Handle case where provider.name might be null or undefined
     const providerName = provider.name || "Unknown Provider";
 
-    return models.map((model) => ({
-      value: `${providerName},${model || "Unknown Model"}`,
-      label: `${providerName}, ${model || "Unknown Model"}`,
-    }));
-  });
+    return models.map((model) => {
+      const stats = getModelStats(providerName, model || "Unknown Model");
+      const successCount = stats?.success || 0;
+      const status = getModelStatus(providerName, model || "Unknown Model");
+
+      return {
+        value: `${providerName},${model || "Unknown Model"}`,
+        label: `${providerName}, ${model || "Unknown Model"}`,
+        successCount,
+        status,
+      };
+    });
+  }).sort((a, b) => b.successCount - a.successCount); // Sort by success count descending
 
   // Construct the hovered value for highlighting
   const hoveredValue = hoveredModel?.provider && hoveredModel?.model
@@ -81,7 +144,13 @@ export function Router({ hoveredModel }: RouterProps) {
       </CardHeader>
       <CardContent className="flex-grow space-y-5 overflow-y-auto p-4">
         <div className="space-y-2">
-          <Label>{t("router.default")}</Label>
+          <Label
+            onMouseEnter={() => handleLabelHover(routerConfig.default)}
+            onMouseLeave={handleLabelLeave}
+            className="cursor-pointer"
+          >
+            {t("router.default")}
+          </Label>
           <Combobox
             options={modelOptions}
             value={routerConfig.default || ""}
@@ -90,10 +159,17 @@ export function Router({ hoveredModel }: RouterProps) {
             searchPlaceholder={t("router.searchModel")}
             emptyPlaceholder={t("router.noModelFound")}
             hoveredValue={hoveredValue}
+            onItemHover={handleComboboxItemHover}
           />
         </div>
         <div className="space-y-2">
-          <Label>{t("router.background")}</Label>
+          <Label
+            onMouseEnter={() => handleLabelHover(routerConfig.background)}
+            onMouseLeave={handleLabelLeave}
+            className="cursor-pointer"
+          >
+            {t("router.background")}
+          </Label>
           <Combobox
             options={modelOptions}
             value={routerConfig.background || ""}
@@ -102,10 +178,17 @@ export function Router({ hoveredModel }: RouterProps) {
             searchPlaceholder={t("router.searchModel")}
             emptyPlaceholder={t("router.noModelFound")}
             hoveredValue={hoveredValue}
+            onItemHover={handleComboboxItemHover}
           />
         </div>
         <div className="space-y-2">
-          <Label>{t("router.think")}</Label>
+          <Label
+            onMouseEnter={() => handleLabelHover(routerConfig.think)}
+            onMouseLeave={handleLabelLeave}
+            className="cursor-pointer"
+          >
+            {t("router.think")}
+          </Label>
           <Combobox
             options={modelOptions}
             value={routerConfig.think || ""}
@@ -114,12 +197,19 @@ export function Router({ hoveredModel }: RouterProps) {
             searchPlaceholder={t("router.searchModel")}
             emptyPlaceholder={t("router.noModelFound")}
             hoveredValue={hoveredValue}
+            onItemHover={handleComboboxItemHover}
           />
         </div>
         <div className="space-y-2">
           <div className="flex items-center gap-4">
             <div className="flex-1">
-              <Label>{t("router.longContext")}</Label>
+              <Label
+                onMouseEnter={() => handleLabelHover(routerConfig.longContext)}
+                onMouseLeave={handleLabelLeave}
+                className="cursor-pointer"
+              >
+                {t("router.longContext")}
+              </Label>
               <Combobox
                 options={modelOptions}
                 value={routerConfig.longContext || ""}
@@ -128,6 +218,7 @@ export function Router({ hoveredModel }: RouterProps) {
                 searchPlaceholder={t("router.searchModel")}
                 emptyPlaceholder={t("router.noModelFound")}
                 hoveredValue={hoveredValue}
+                onItemHover={handleComboboxItemHover}
               />
             </div>
             <div className="w-48">
@@ -142,7 +233,13 @@ export function Router({ hoveredModel }: RouterProps) {
           </div>
         </div>
         <div className="space-y-2">
-          <Label>{t("router.webSearch")}</Label>
+          <Label
+            onMouseEnter={() => handleLabelHover(routerConfig.webSearch)}
+            onMouseLeave={handleLabelLeave}
+            className="cursor-pointer"
+          >
+            {t("router.webSearch")}
+          </Label>
           <Combobox
             options={modelOptions}
             value={routerConfig.webSearch || ""}
@@ -151,12 +248,19 @@ export function Router({ hoveredModel }: RouterProps) {
             searchPlaceholder={t("router.searchModel")}
             emptyPlaceholder={t("router.noModelFound")}
             hoveredValue={hoveredValue}
+            onItemHover={handleComboboxItemHover}
           />
         </div>
         <div className="space-y-2">
           <div className="flex items-center gap-4">
             <div className="flex-1">
-              <Label>{t("router.image")} (beta)</Label>
+              <Label
+                onMouseEnter={() => handleLabelHover(routerConfig.image)}
+                onMouseLeave={handleLabelLeave}
+                className="cursor-pointer"
+              >
+                {t("router.image")} (beta)
+              </Label>
               <Combobox
                 options={modelOptions}
                 value={routerConfig.image || ""}
@@ -165,6 +269,7 @@ export function Router({ hoveredModel }: RouterProps) {
                 searchPlaceholder={t("router.searchModel")}
                 emptyPlaceholder={t("router.noModelFound")}
                 hoveredValue={hoveredValue}
+                onItemHover={handleComboboxItemHover}
               />
             </div>
             <div className="w-48">
@@ -182,7 +287,13 @@ export function Router({ hoveredModel }: RouterProps) {
           </div>
         </div>
         <div className="space-y-2">
-          <Label>{t("router.compact")}</Label>
+          <Label
+            onMouseEnter={() => handleLabelHover(routerConfig.compact)}
+            onMouseLeave={handleLabelLeave}
+            className="cursor-pointer"
+          >
+            {t("router.compact")}
+          </Label>
           <Combobox
             options={modelOptions}
             value={routerConfig.compact || ""}
@@ -191,6 +302,7 @@ export function Router({ hoveredModel }: RouterProps) {
             searchPlaceholder={t("router.searchModel")}
             emptyPlaceholder={t("router.noModelFound")}
             hoveredValue={hoveredValue}
+            onItemHover={handleComboboxItemHover}
           />
         </div>
       </CardContent>

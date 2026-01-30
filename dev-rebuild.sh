@@ -20,13 +20,17 @@ echo "📦 安装依赖..."
 pnpm install
 echo "✅ 依赖安装完成"
 
-# 3. 构建项目
+# 3. 构建项目（如果构建失败，set -e 会自动退出，不会执行后续步骤）
 echo "🔨 构建项目..."
 pnpm build
 echo "✅ 项目构建完成"
 
-# 4. 全局安装 CLI
+# 4. 全局安装 CLI（先卸载再安装，确保使用最新构建）
 echo "📦 全局安装 CLI..."
+# 先卸载（忽略错误，因为可能未安装）
+npm uninstall -g @musistudio/claude-code-router 2>/dev/null || true
+# 再安装（如果这步失败，set -e 会让脚本退出）
+# 注意：如果安装失败，用户需要手动运行 'npm install . -g' 恢复
 npm install . -g
 echo "✅ 全局安装完成"
 
