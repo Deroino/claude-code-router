@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useTranslation } from "react-i18next";
 import type { ModelMonitorLogEntry } from "@/hooks/useModelMonitorLogs";
 
 interface ModelMonitorPanelProps {
@@ -12,6 +13,7 @@ interface ModelMonitorPanelProps {
 }
 
 export function ModelMonitorPanel({ logs, status, currentFile, onClose, onHoverModel }: ModelMonitorPanelProps) {
+  const { t } = useTranslation();
   const endRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll to bottom when logs update
@@ -52,9 +54,9 @@ export function ModelMonitorPanel({ logs, status, currentFile, onClose, onHoverM
       <div className="flex items-center justify-between px-4 py-3 border-b bg-gray-50/50">
         <div className="flex items-center gap-2">
           <Activity className="h-4 w-4 text-gray-500" />
-          <h3 className="font-semibold text-gray-800">Model Monitor</h3>
+          <h3 className="font-semibold text-gray-800">{t('monitor.title')}</h3>
           {status === 'connecting' && (
-            <span className="text-xs font-normal text-muted-foreground animate-pulse">(Connecting...)</span>
+            <span className="text-xs font-normal text-muted-foreground animate-pulse">({t('monitor.connecting')})</span>
           )}
           {currentFile && (
             <span className="text-xs font-normal text-muted-foreground truncate max-w-[150px]" title={currentFile}>
@@ -63,7 +65,7 @@ export function ModelMonitorPanel({ logs, status, currentFile, onClose, onHoverM
           )}
         </div>
         <Button variant="ghost" size="icon" onClick={onClose} className="h-6 w-6">
-          <span className="sr-only">Close</span>
+          <span className="sr-only">{t('monitor.close')}</span>
           <svg
             xmlns="http://www.w3.org/2000/svg"
             width="24"
@@ -85,7 +87,7 @@ export function ModelMonitorPanel({ logs, status, currentFile, onClose, onHoverM
       <div className="flex-1 overflow-y-auto p-4 text-xs font-mono bg-gray-50/30">
         <div className="space-y-1.5">
           {logs.length === 0 ? (
-            <div className="text-muted-foreground text-center py-8">Waiting for requests...</div>
+            <div className="text-muted-foreground text-center py-8">{t('monitor.waiting_for_requests')}</div>
           ) : (
             logs.map((log) => (
               <div
@@ -113,7 +115,7 @@ export function ModelMonitorPanel({ logs, status, currentFile, onClose, onHoverM
                       </div>
                       {log.provider && (
                         <div className="text-gray-500 flex items-center gap-1">
-                          via <span className="font-medium text-gray-600">{log.provider}</span>
+                          {t('monitor.via')} <span className="font-medium text-gray-600">{log.provider}</span>
                         </div>
                       )}
                     </div>

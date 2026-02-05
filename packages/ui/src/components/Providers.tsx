@@ -1125,11 +1125,11 @@ export function Providers({
                             onClick={handleFetchModels}
                             disabled={isFetchingModels}
                           >
-                            {isFetchingModels ? "..." : "从端点获取"}
+                            {isFetchingModels ? "..." : t('model_selector.fetch_from_endpoint')}
                           </Button>
                         </TooltipTrigger>
                         <TooltipContent>
-                          <p>从 /v1/models 获取可用模型列表</p>
+                          <p>{t('model_selector.fetch_description')}</p>
                         </TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
@@ -1495,9 +1495,9 @@ export function Providers({
       <Dialog open={showModelSelectDialog} onOpenChange={handleCancelModelSelection}>
         <DialogContent className="max-h-[80vh] flex flex-col sm:max-w-3xl">
           <DialogHeader>
-            <DialogTitle>选择模型</DialogTitle>
+            <DialogTitle>{t('model_selector.title')}</DialogTitle>
             <DialogDescription>
-              从端点获取的可用模型列表，勾选要添加的模型
+              {t('model_selector.description')}
             </DialogDescription>
           </DialogHeader>
           {modelFetchError ? (
@@ -1510,7 +1510,7 @@ export function Providers({
                 <div className="relative flex-1">
                   <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
                   <Input
-                    placeholder="搜索模型..."
+                    placeholder={t('model_selector.search_placeholder')}
                     value={modelSearchTerm}
                     onChange={(e) => setModelSearchTerm(e.target.value)}
                     className="pl-8"
@@ -1532,10 +1532,10 @@ export function Providers({
                     checked={selectedModels.size === fetchedModels.length && fetchedModels.length > 0}
                     onCheckedChange={handleSelectAll}
                   />
-                  <span className="text-sm">全选</span>
+                  <span className="text-sm">{t('model_selector.select_all')}</span>
                 </label>
                 <span className="text-sm text-gray-500">
-                  已选择 {selectedModels.size} / {filteredModels.length} 个模型
+                  {t('model_selector.selected_count', { selected: selectedModels.size, total: filteredModels.length })}
                 </span>
               </div>
               <div className="space-y-1">
@@ -1561,10 +1561,10 @@ export function Providers({
           )}
           <DialogFooter className="mt-4">
             <Button variant="outline" onClick={handleCancelModelSelection}>
-              取消
+              {t('model_selector.cancel')}
             </Button>
             <Button onClick={handleConfirmModelSelection} disabled={selectedModels.size === 0}>
-              确认添加 ({selectedModels.size})
+              {t('model_selector.confirm', { count: selectedModels.size })}
             </Button>
           </DialogFooter>
         </DialogContent>

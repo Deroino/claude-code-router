@@ -327,11 +327,11 @@ function App() {
                   className="transition-all-ease hover:scale-[1.02]"
                 >
                   <Server className="h-4 w-4 mr-1.5" />
-                  Providers
+                  {t('navbar.providers')}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Toggle Providers Panel</p>
+                <p>{t('navbar.tooltip_providers')}</p>
               </TooltipContent>
             </Tooltip>
             <Tooltip>
@@ -343,11 +343,11 @@ function App() {
                   className="transition-all-ease hover:scale-[1.02]"
                 >
                   <Route className="h-4 w-4 mr-1.5" />
-                  Router
+                  {t('navbar.router')}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Toggle Router Panel</p>
+                <p>{t('navbar.tooltip_router')}</p>
               </TooltipContent>
             </Tooltip>
             <Tooltip>
@@ -359,11 +359,11 @@ function App() {
                   className="transition-all-ease hover:scale-[1.02]"
                 >
                   <Workflow className="h-4 w-4 mr-1.5" />
-                  Transformers
+                  {t('navbar.transformers')}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Toggle Transformers Panel</p>
+                <p>{t('navbar.tooltip_transformers')}</p>
               </TooltipContent>
             </Tooltip>
             <Tooltip>
@@ -375,11 +375,11 @@ function App() {
                   className="transition-all-ease hover:scale-[1.02]"
                 >
                   <Activity className="h-4 w-4 mr-1.5" />
-                  Monitor
+                  {t('navbar.monitor')}
                 </Button>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Toggle Model Monitor Panel</p>
+                <p>{t('navbar.tooltip_monitor')}</p>
               </TooltipContent>
             </Tooltip>
           </div>
@@ -440,14 +440,14 @@ function App() {
                   className="w-full justify-start transition-all-ease hover:scale-[1.02]"
                   onClick={() => i18n.changeLanguage('en')}
                 >
-                  English
+                  {t('app.language_english')}
                 </Button>
                 <Button
                   variant={i18n.language.startsWith('zh') ? 'default' : 'ghost'}
                   className="w-full justify-start transition-all-ease hover:scale-[1.02]"
                   onClick={() => i18n.changeLanguage('zh')}
                 >
-                  中文
+                  {t('app.language_chinese')}
                 </Button>
               </div>
             </PopoverContent>
