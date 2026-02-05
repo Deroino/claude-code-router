@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
-import { CheckCircle, XCircle, AlertCircle, X } from 'lucide-react';
+import { CheckCircle, XCircle, AlertCircle, Info, X } from 'lucide-react';
 
 interface ToastProps {
   message: string;
-  type: 'success' | 'error' | 'warning';
+  type: 'success' | 'error' | 'warning' | 'info';
   duration?: number;
   onClose: () => void;
 }
@@ -27,6 +27,8 @@ export function Toast({ message, type, duration = 3000, onClose }: ToastProps) {
         return <XCircle className="h-5 w-5 text-red-500" />;
       case 'warning':
         return <AlertCircle className="h-5 w-5 text-yellow-500" />;
+      case 'info':
+        return <Info className="h-5 w-5 text-blue-500" />;
       default:
         return null;
     }
@@ -40,6 +42,8 @@ export function Toast({ message, type, duration = 3000, onClose }: ToastProps) {
         return 'bg-red-100 border-red-200';
       case 'warning':
         return 'bg-yellow-100 border-yellow-200';
+      case 'info':
+        return 'bg-blue-100 border-blue-200';
       default:
         return 'bg-gray-100 border-gray-200';
     }

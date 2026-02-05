@@ -1009,6 +1009,34 @@ export const createServer = async (config: any): Promise<any> => {
     return new Promise(() => {});
   });
 
+  // SSE restart status endpoint
+  app.get("/api/restart/status", async (req: any, reply: any) => {
+    // Set SSE headers
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.setHeader("Access-Control-Allow-Origin", "*");
+    reply.raw.setHeader("X-Accel-Buffering", "no");
+
+    const res = reply.raw;
+
+    // Send restart preparing status
+    res.write(`data: ${JSON.stringify({ type: 'restart_preparing', timestamp: Date.now() })}\n\n`);
+
+    // Wait 1 second then send service stopping
+    setTimeout(() => {
+      res.write(`data: ${JSON.stringify({ type: 'service_stopping', timestamp: Date.now() })}\n\n`);
+      res.end();
+    }, 1000);
+
+    // Handle connection close
+    req.raw.on('close', () => {
+      try { res.end(); } catch (e) {}
+    });
+
+    return new Promise(() => {});
+  });
+
   // Get request stats
   app.get("/api/request-stats", async (req: any, reply: any) => {
     try {

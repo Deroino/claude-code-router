@@ -102,7 +102,7 @@ function App() {
   }, []);
 
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
-  const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'error' | 'warning'; duration?: number }[]>([]);
+  const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'error' | 'warning' | 'info'; duration?: number }[]>([]);
   // 版本检查状态
   const [isNewVersionAvailable, setIsNewVersionAvailable] = useState(false);
   const [isUpdateDialogOpen, setIsUpdateDialogOpen] = useState(false);
@@ -113,7 +113,7 @@ function App() {
   const hasAutoCheckedUpdate = useRef(false);
 
   // Show toast function with max limit
-  const showToast = useCallback((message: string, type: 'success' | 'error' | 'warning', duration?: number) => {
+  const showToast = useCallback((message: string, type: 'success' | 'error' | 'warning' | 'info', duration?: number) => {
     const id = Date.now() + Math.random().toString(36).substring(2);
     setToasts(prev => {
       // Keep only the last 4 toasts, remove oldest if exceeds limit
@@ -146,23 +146,66 @@ function App() {
     }
 
     try {
-      const response = await api.restartService();
-      console.log('Service restarted successfully');
+      // Connect to restart status SSE first
+      const statusEventSource = new EventSource('/api/restart/status');
+      let serviceStopped = false;
 
-      if (response && typeof response === 'object' && 'success' in response) {
-        const apiResponse = response as { success: boolean; message?: string };
-        if (apiResponse.success) {
-          showToast(apiResponse.message || t('app.restart_success'), 'success');
-        } else {
-          showToast(apiResponse.message || t('app.restart_failed'), 'error');
+      statusEventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'restart_preparing') {
+            showToast(t('app.restart_preparing') || 'Service is preparing to restart...', 'info');
+          } else if (data.type === 'service_stopping') {
+            showToast(t('app.service_stopping') || 'Service is stopping, please wait...', 'warning');
+            serviceStopped = true;
+            statusEventSource.close();
+
+            // Start polling for service recovery
+            pollForServiceRecovery();
+          }
+        } catch (e) {
+          console.error('Failed to parse restart status:', e);
         }
-      } else {
-        showToast(t('app.restart_success'), 'success');
-      }
+      };
+
+      statusEventSource.onerror = () => {
+        statusEventSource.close();
+      };
+
+      // Call restart API
+      const response = await api.restartService();
+      console.log('Restart initiated:', response);
+
     } catch (error) {
       console.error('Failed to restart service:', error);
       showToast(t('app.restart_failed') + ': ' + (error as Error).message, 'error');
     }
+  };
+
+  // Poll for service recovery after restart
+  const pollForServiceRecovery = () => {
+    let attempts = 0;
+    const maxAttempts = 30; // 60 seconds max
+
+    const checkService = setInterval(async () => {
+      attempts++;
+      try {
+        // Try to fetch config to check if service is back
+        const response = await fetch('/api/config');
+        if (response.ok) {
+          clearInterval(checkService);
+          showToast(t('app.restart_success') || 'Service restarted successfully!', 'success');
+          // Reload the page to refresh all data
+          setTimeout(() => window.location.reload(), 1500);
+        }
+      } catch (e) {
+        // Service not ready yet
+        if (attempts >= maxAttempts) {
+          clearInterval(checkService);
+          showToast(t('app.restart_timeout') || 'Restart timeout, please refresh manually', 'error');
+        }
+      }
+    }, 2000);
   };
   
   // 检查更新函数

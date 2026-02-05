@@ -13,7 +13,7 @@ import {
   readPresetFile,
 } from "@CCR/shared";
 import { getServer } from "@CCR/server";
-import { writeFileSync, existsSync, readFileSync, mkdirSync } from "fs";
+import { writeFileSync, existsSync, readFileSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { checkForUpdates, performUpdate } from "./update";
 import { version } from "../../package.json";
 import { spawn } from "child_process";
@@ -234,6 +234,30 @@ export const restartService = async () => {
   } catch (e) {
     console.log("Service was not running or failed to stop.");
     cleanupPidFile();
+  }
+
+  // Clean up old log files, keeping only the 3 most recent
+  try {
+    console.log("Cleaning up old log files...");
+    const logDir = path.join(os.homedir(), '.claude-code-router', 'logs');
+    if (existsSync(logDir)) {
+      const files = readdirSync(logDir)
+        .filter(f => f.startsWith('ccr-') && f.endsWith('.log'))
+        .sort()
+        .reverse()
+        .slice(3);
+
+      files.forEach(file => {
+        try {
+          unlinkSync(path.join(logDir, file));
+          console.log(`Removed old log file: ${file}`);
+        } catch (err) {
+          console.warn(`Failed to remove log file ${file}:`, err);
+        }
+      });
+    }
+  } catch (logCleanupErr) {
+    console.warn('Log cleanup warning:', logCleanupErr);
   }
 
   // Start the service again in the background

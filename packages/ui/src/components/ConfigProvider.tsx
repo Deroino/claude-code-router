@@ -194,30 +194,69 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
     };
   }, [config]);
 
-  // SSE listener for external config updates
+  // SSE listener for external config updates with auto-reconnect
   useEffect(() => {
-    const eventSource = new EventSource('/api/config/stream');
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
+    let eventSource: EventSource | null = null;
+    let reconnectTimeoutId: NodeJS.Timeout | null = null;
 
-    eventSource.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message.type === 'config_update') {
-          isExternalUpdateRef.current = true;
-          setConfig(message.data);
-          lastServerConfigRef.current = message.data;
-        }
-      } catch (error) {
-        console.error('Failed to parse SSE message:', error);
+    const createEventSource = (): EventSource | null => {
+      if (reconnectAttempts >= maxReconnectAttempts) {
+        console.error('Max SSE reconnection attempts reached');
+        return null;
       }
+
+      console.log(`Creating SSE connection (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})...`);
+      const es = new EventSource('/api/config/stream');
+
+      es.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === 'config_update') {
+            isExternalUpdateRef.current = true;
+            setConfig(message.data);
+            lastServerConfigRef.current = message.data;
+          }
+        } catch (error) {
+          console.error('Failed to parse SSE message:', error);
+        }
+      };
+
+      es.onerror = (error) => {
+        console.error('SSE connection error:', error);
+        es.close();
+
+        // Attempt to reconnect with exponential backoff
+        reconnectAttempts++;
+        if (reconnectAttempts < maxReconnectAttempts) {
+          const delay = Math.min(reconnectAttempts * 1000, 5000);
+          console.log(`Will attempt to reconnect in ${delay}ms...`);
+          reconnectTimeoutId = setTimeout(() => {
+            eventSource = createEventSource();
+          }, delay);
+        } else {
+          console.error('Max reconnection attempts reached, stopping reconnection');
+        }
+      };
+
+      es.onopen = () => {
+        console.log('SSE connection established');
+        reconnectAttempts = 0; // Reset on successful connection
+      };
+
+      return es;
     };
 
-    eventSource.onerror = (error) => {
-      console.error('SSE connection error:', error);
-      // EventSource has built-in auto-reconnect, just log the error
-    };
+    eventSource = createEventSource();
 
     return () => {
-      eventSource.close();
+      if (eventSource) {
+        eventSource.close();
+      }
+      if (reconnectTimeoutId) {
+        clearTimeout(reconnectTimeoutId);
+      }
     };
   }, []);
 
