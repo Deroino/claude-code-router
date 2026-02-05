@@ -28,6 +28,32 @@ import fastifyMultipart from "@fastify/multipart";
 import AdmZip from "adm-zip";
 import { ConfigService } from "@musistudio/llms";
 
+// Helper functions to detect and handle compressed/garbled error responses
+function isCompressedError(text: string): boolean {
+  // Detect gzip compression magic number (0x1f8b) or other compression markers
+  return text.charCodeAt(0) === 0x1F ||
+         text.includes('\u001f') ||
+         text.includes('\ufffd') ||
+         (text.length > 0 && text.charCodeAt(0) === 31) ||
+         // Also detect excessive non-printable characters which might indicate binary data
+         (text.length > 0 && text.match(/[^\x20-\x7E\s]/g)?.length! > text.length * 0.3);
+}
+
+function replaceCompressedError(text: string, provider: string, model: string, status: number): any {
+  // Return structured error object instead of garbled text
+  const errorMsg = `模型 "${model}" (提供商: ${provider}) 返回了无法解析的错误；状态码: ${status}`;
+  return {
+    message: errorMsg,
+    type: 'provider_error',
+    code: 'invalid_response',
+    status: status,
+    detail: '可能是网络或编码问题，请检查模型配置或稍后重试',
+    originalSize: text.length,
+    note: '原始错误信息为压缩数据或二进制格式，无法显示',
+    hint: '请确认该模型已被提供商正确配置并支持'
+  };
+}
+
 export const createServer = async (config: any): Promise<any> => {
   const server = new Server(config);
   const app = server.app;
@@ -285,15 +311,30 @@ export const createServer = async (config: any): Promise<any> => {
         const errorText = await response.text();
         let errorData = errorText;
 
-        // Try to parse error as JSON to remove escaped characters
-        try {
-          const parsed = JSON.parse(errorText);
-          errorData = parsed;
-        } catch (e) {
-          // If not valid JSON, keep as is
+        // Check if it's gzip compressed or garbled error
+        if (isCompressedError(errorText)) {
+          // Log the original garbled error for debugging
+          app.log.warn({
+            originalError: errorText.substring(0, 200) + (errorText.length > 200 ? '...' : ''),
+            provider,
+            model,
+            status: response.status,
+            errorSize: errorText.length
+          }, 'Received compressed/garbled error from provider');
+
+          // Replace with readable error information
+          errorData = replaceCompressedError(errorText, provider, model, response.status);
+        } else {
+          // Try to parse error as JSON to remove escaped characters
+          try {
+            const parsed = JSON.parse(errorText);
+            errorData = parsed;
+          } catch (e) {
+            // If not valid JSON, keep as is
+          }
         }
 
-        // Record failure statistics
+        // Record failure statistics with original error text (not the readable version)
         requestStatsService.recordFailure(provider, model, processedRequest, errorText, response.status);
 
         // Always return 200 to avoid triggering frontend auth redirect
