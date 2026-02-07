@@ -2,6 +2,9 @@ import { Transformer, TransformerConstructor } from "@/types/transformer";
 import { ConfigService } from "./config";
 import Transformers from "@/transformer";
 import Module from "node:module";
+import { homedir } from "os";
+import { join } from "path";
+import { stat, readdir } from "fs/promises";
 
 interface TransformerConfig {
   transformers: Array<{
@@ -114,6 +117,7 @@ export class TransformerService {
     try {
       await this.registerDefaultTransformersInternal();
       await this.loadFromConfig();
+      await this.loadFromPluginsDirectory();
     } catch (error: any) {
       this.logger.error(
         `TransformerService init error: ${error.message}\nStack: ${error.stack}`
@@ -158,8 +162,58 @@ export class TransformerService {
     const transformers = this.configService.get<
       TransformerConfig["transformers"]
     >("transformers", []);
-    for (const transformer of transformers) {
-      await this.registerTransformerFromConfig(transformer);
+    // Use Promise.allSettled to load transformers in parallel
+    const results = await Promise.allSettled(
+      transformers.map(transformer =>
+        this.registerTransformerFromConfig(transformer)
+      )
+    );
+    // Log any failures
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        this.logger.error(
+          `Failed to load transformer at index ${index}: ${result.reason}`
+        );
+      }
+    });
+  }
+
+  private async loadFromPluginsDirectory(): Promise<void> {
+    try {
+      const pluginsDir = join(homedir(), ".claude-code-router", "plugins");
+      const dirStats = await stat(pluginsDir).catch(() => null);
+      if (!dirStats || !dirStats.isDirectory()) {
+        return;
+      }
+
+      const files = await readdir(pluginsDir);
+
+      // Load plugins in parallel
+      const loadPromises = files
+        .filter(f => f.endsWith('.js'))
+        .map(async (file) => {
+          const filePath = join(pluginsDir, file);
+
+          const transformersFromConfig = this.configService.get<
+            TransformerConfig["transformers"]
+          >("transformers", []);
+
+          const isAlreadyConfigured = transformersFromConfig.some(
+            t => t.path === filePath
+          );
+
+          if (!isAlreadyConfigured) {
+            this.logger.info(`Loading transformer from plugins directory: ${filePath}`);
+            await this.registerTransformerFromConfig({
+              path: filePath,
+              options: {}
+            });
+          }
+        });
+
+      await Promise.allSettled(loadPromises);
+    } catch (error: any) {
+      this.logger.warn(`Failed to load transformers from plugins directory: ${error.message}`);
     }
   }
 }

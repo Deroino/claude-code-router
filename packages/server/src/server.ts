@@ -169,13 +169,122 @@ export const createServer = async (config: any): Promise<any> => {
     return { success: true, message: "Config saved successfully", lastModified: configWithTimestamp._lastModified };
   });
 
+  /**
+   * Process transformer result, extracting body and config if present
+   * Handles both simple return (body only) and structured return (body + config)
+   */
+  function processTransformerResult(
+    result: any,
+    currentBody: any,
+    currentConfig: any
+  ): { body: any; config: any } {
+    // Check if result has structure { body: ..., config: ... }
+    if (result && typeof result === 'object' && result.body) {
+      // Structured return - extract body and merge config
+      const newConfig = { ...currentConfig };
+      if (result.config) {
+        newConfig.headers = {
+          ...(currentConfig.headers || {}),
+          ...(result.config.headers || {})
+        };
+        if (result.config.url) {
+          newConfig.url = result.config.url;
+        }
+      }
+      return { body: result.body, config: newConfig };
+    }
+    // Simple return - just update body
+    return { body: result, config: currentConfig };
+  }
+
+  /**
+   * Build request headers, merging transformer headers with default authentication
+   * Cleans up headers with 'undefined' values
+   */
+  function buildRequestHeaders(
+    apiKey: string,
+    transformerHeaders: Record<string, string | undefined> = {}
+  ): Record<string, string> {
+    const headers: Record<string, string | undefined> = {
+      "Content-Type": "application/json",
+    };
+
+    // Only add default Authorization if transformer didn't set x-api-key
+    // and didn't explicitly set authorization to undefined
+    const hasXApiKey = transformerHeaders["x-api-key"] || transformerHeaders["X-API-Key"];
+    const authExplicitlyUndefined = transformerHeaders.authorization === undefined || transformerHeaders.Authorization === undefined;
+
+    if (!hasXApiKey && !authExplicitlyUndefined) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
+
+    // Merge transformer headers
+    for (const [key, value] of Object.entries(transformerHeaders)) {
+      if (value !== undefined && value !== "undefined") {
+        headers[key] = value;
+      }
+    }
+
+    // Clean up headers with 'undefined' values or containing "undefined"
+    for (const key in headers) {
+      if (headers[key] === "undefined" || headers[key] === undefined ||
+          (["authorization", "Authorization"].includes(key) && headers[key]?.includes("undefined"))) {
+        delete headers[key];
+      }
+    }
+
+    return headers as Record<string, string>;
+  }
+
+  /**
+   * Extract response content from various response formats
+   * Supports: OpenAI format, Anthropic format, and generic formats
+   */
+  function extractResponseContent(data: any): string {
+    // OpenAI format: choices[0].message.content
+    if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
+      return data.choices[0].message.content;
+    }
+
+    // Anthropic format: content[0].text
+    if (data.content && data.content[0] && data.content[0].text) {
+      return data.content[0].text;
+    }
+
+    // Direct content field
+    if (typeof data.content === 'string') {
+      return data.content;
+    }
+
+    // Generic text field
+    if (typeof data.text === 'string') {
+      return data.text;
+    }
+
+    // Nested message content
+    if (data.message && typeof data.message.content === 'string') {
+      return data.message.content;
+    }
+
+    // Return empty string if no format matches
+    return '';
+  }
+
   // Add endpoint to test a specific provider+model
   app.post("/api/model-test", async (req: any, reply: any) => {
     // @ts-ignore - requestStatsService is exported but not in type definitions
     const { requestStatsService } = await import("@musistudio/llms");
 
+    // Declare variables outside try block for catch block access
+    let provider: string;
+    let model: string;
+    let providerData: any;
+    let processedRequest: any;
+    let requestConfig: any = {};
+
     try {
-      const { provider, model, message } = req.body;
+      ({ provider, model } = req.body);
+      const { message } = req.body;
 
       if (!provider || !model) {
         reply.status(400).send({ success: false, error: "provider and model are required" });
@@ -183,11 +292,21 @@ export const createServer = async (config: any): Promise<any> => {
       }
 
       const serverInstance = (app as any)._server;
-      const providerService = serverInstance.providerService;
+      const providerService = serverInstance?.providerService;
+
+      // Defensive check: ensure providerService is available
+      if (!providerService) {
+        reply.status(503).send({
+          success: false,
+          error: "Service is initializing, please try again later"
+        });
+        return;
+      }
+
       const transformerService = serverInstance.transformerService;
 
       // Get provider
-      const providerData = providerService.getProvider(provider);
+      providerData = providerService.getProvider(provider);
       if (!providerData) {
         reply.status(404).send({ success: false, error: `Provider '${provider}' not found` });
         return;
@@ -215,11 +334,27 @@ export const createServer = async (config: any): Promise<any> => {
       };
 
       // Apply provider transformers if configured
-      let processedRequest = requestBody;
+      processedRequest = requestBody;
+      requestConfig = {};  // Track config from transformers
+
       if (providerData.transformer?.use) {
         for (const transformer of providerData.transformer.use) {
           if (transformer && typeof transformer.transformRequestIn === "function") {
-            processedRequest = await transformer.transformRequestIn(processedRequest);
+            // Pass provider and context parameters
+            const transformResult = await transformer.transformRequestIn(
+              processedRequest,
+              providerData,
+              { req }  // Context object
+            );
+
+            // Process result using helper function
+            const { body, config } = processTransformerResult(
+              transformResult,
+              processedRequest,
+              requestConfig
+            );
+            processedRequest = body;
+            requestConfig = config;
           }
         }
       }
@@ -228,16 +363,118 @@ export const createServer = async (config: any): Promise<any> => {
       if (providerData.transformer?.[model]?.use) {
         for (const transformer of providerData.transformer[model].use) {
           if (transformer && typeof transformer.transformRequestIn === "function") {
-            processedRequest = await transformer.transformRequestIn(processedRequest);
+            // Pass provider and context parameters
+            const transformResult = await transformer.transformRequestIn(
+              processedRequest,
+              providerData,
+              { req }  // Context object
+            );
+
+            // Process result using helper function
+            const { body, config } = processTransformerResult(
+              transformResult,
+              processedRequest,
+              requestConfig
+            );
+            processedRequest = body;
+            requestConfig = config;
+          }
+        }
+      }
+
+      // Apply auth method from transformers if available
+      // Check provider-level transformers for auth method
+      for (const transformer of providerData.transformer?.use || []) {
+        if (transformer && typeof transformer.auth === "function") {
+          app.log.info({ transformer: transformer.name }, 'Calling auth method');
+          const authResult = await transformer.auth(processedRequest, providerData, { req });
+          app.log.info({ authResult }, 'Auth method result');
+          if (authResult?.body) {
+            const { body, config } = processTransformerResult(
+              authResult,
+              processedRequest,
+              requestConfig
+            );
+            processedRequest = body;
+            if (config?.headers) {
+              requestConfig.headers = {
+                ...(requestConfig.headers || {}),
+                ...config.headers
+              };
+            }
+          }
+        }
+      }
+
+      // Check model-specific transformers for auth method
+      for (const transformer of providerData.transformer?.[model]?.use || []) {
+        if (transformer && typeof transformer.auth === "function") {
+          const authResult = await transformer.auth(processedRequest, providerData, { req });
+          if (authResult?.body) {
+            const { body, config } = processTransformerResult(
+              authResult,
+              processedRequest,
+              requestConfig
+            );
+            processedRequest = body;
+            if (config?.headers) {
+              requestConfig.headers = {
+                ...(requestConfig.headers || {}),
+                ...config.headers
+              };
+            }
           }
         }
       }
 
       // Send request to provider
+      // Build target URL with transformer endPoint support
+      let targetUrl = requestConfig.url || providerData.baseUrl;
+
+      // If transformer has endPoint, append it to the baseUrl
+      if (!requestConfig.url && providerData.transformer?.use) {
+        for (const transformer of providerData.transformer.use) {
+          if (transformer && transformer.endPoint) {
+            // Remove trailing slash from baseUrl and leading slash from endPoint
+            const baseUrl = targetUrl.replace(/\/$/, '');
+            const endPoint = transformer.endPoint.replace(/^\//, '');
+            targetUrl = `${baseUrl}/${endPoint}`;
+            app.log.debug({ transformer: transformer.name, endPoint: transformer.endPoint }, 'Using transformer endPoint');
+            break; // Use first transformer with endPoint
+          }
+        }
+      }
+
+      // Also check model-specific transformers for endPoint
+      if (!requestConfig.url && providerData.transformer?.[model]?.use) {
+        for (const transformer of providerData.transformer[model].use) {
+          if (transformer && transformer.endPoint) {
+            const baseUrl = targetUrl.replace(/\/$/, '');
+            const endPoint = transformer.endPoint.replace(/^\//, '');
+            targetUrl = `${baseUrl}/${endPoint}`;
+            app.log.debug({ transformer: transformer.name, endPoint: transformer.endPoint }, 'Using model-specific transformer endPoint');
+            break;
+          }
+        }
+      }
+
       // Get API key with rotation support
       const selectedApiKey = typeof providerData.apiKey === 'string'
         ? providerData.apiKey
         : providerService.getApiKey(providerData.name, providerData.apiKey);
+
+      // Build headers using transformer config
+      const requestHeaders = buildRequestHeaders(
+        selectedApiKey,
+        requestConfig.headers || {}
+      );
+
+      // Debug output
+      console.log('[MODEL-TEST DEBUG] Provider:', provider, 'Model:', model);
+      console.log('[MODEL-TEST DEBUG] Transformer headers:', JSON.stringify(requestConfig.headers));
+      console.log('[MODEL-TEST DEBUG] Final headers:', JSON.stringify(requestHeaders));
+      console.log('[MODEL-TEST DEBUG] Base URL:', providerData.baseUrl);
+      console.log('[MODEL-TEST DEBUG] Target URL:', targetUrl);
 
       // Create AbortController for timeout
       const controller = new AbortController();
@@ -245,10 +482,7 @@ export const createServer = async (config: any): Promise<any> => {
 
       const fetchOptions: RequestInit = {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${selectedApiKey}`
-        },
+        headers: requestHeaders,
         body: JSON.stringify(processedRequest),
         signal: controller.signal
       };
@@ -259,30 +493,24 @@ export const createServer = async (config: any): Promise<any> => {
         (fetchOptions as any).dispatcher = new ProxyAgent(httpsProxy);
       }
 
-      const response = await fetch(providerData.baseUrl, fetchOptions);
+      const response = await fetch(targetUrl, fetchOptions);
 
       clearTimeout(timeout);
 
       if (response.ok) {
         const data = await response.json();
 
-        // Log the full response structure for debugging
-        app.log.debug({ responseData: data }, 'Model test response structure');
-
         // Extract response text from model
-        let responseText = '';
-        if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
-          responseText = data.choices[0].message.content;
-        } else if (data.content && data.content[0] && data.content[0].text) {
-          responseText = data.content[0].text;
-        } else {
-          // Log unrecognized format
-          app.log.warn({ responseData: data }, 'Unrecognized response format in model test');
-        }
+        let responseText = extractResponseContent(data);
 
-        // Check if response is empty after trimming (only remove leading/trailing whitespace)
+        // Log the full response structure for debugging
+        app.log.debug({ responseData: data, extractedText: responseText }, 'Model test response structure');
+
+        // Check if response is empty after trimming
         const trimmedResponse = responseText.trim();
         if (!trimmedResponse) {
+          // Log unrecognized format
+          app.log.warn({ responseData: data }, 'Unrecognized response format in model test');
           // Record failure for empty response with full response body for debugging
           const errorMessage = `Model returned empty response. Raw response: ${JSON.stringify(data)}`;
           requestStatsService.recordFailure(provider, model, processedRequest, errorMessage, 200);
@@ -349,8 +577,10 @@ export const createServer = async (config: any): Promise<any> => {
     } catch (error: any) {
       // Handle timeout error
       if (error.name === 'AbortError') {
-        // Record failure statistics for timeout
-        requestStatsService.recordFailure(req.body.provider, req.body.model, req.body, "Request timeout (10 seconds)", 504);
+        const p = req.body.provider || 'unknown';
+        const m = req.body.model || 'unknown';
+        app.log.warn({ provider: p, model: m }, 'Model test request timeout');
+        requestStatsService.recordFailure(p, m, processedRequest || {}, "Request timeout (10 seconds)", 504);
         // Always return 200 to avoid triggering frontend auth redirect
         reply.status(200).send({
           success: false,
@@ -361,10 +591,9 @@ export const createServer = async (config: any): Promise<any> => {
       }
 
       // Build detailed error message
-      const serverInstance = (app as any)._server;
-      const providerService = serverInstance.providerService;
-      const providerData = providerService.getProvider(req.body.provider);
-      const targetUrl = providerData?.baseUrl || 'unknown';
+      const p = req.body.provider || 'unknown';
+      const m = req.body.model || 'unknown';
+      const targetUrl = requestConfig?.url || providerData?.baseUrl || 'unknown';
 
       let errorDetail = `Failed to connect to provider API at ${targetUrl}`;
       if (error.cause) {
@@ -375,8 +604,16 @@ export const createServer = async (config: any): Promise<any> => {
       }
       errorDetail += `\nOriginal error: ${error.message || 'Unknown error'}`;
 
+      app.log.error({
+        provider: p,
+        model: m,
+        error: error.message,
+        stack: error.stack,
+        targetUrl
+      }, 'Model test request failed');
+
       // Record failure statistics for other errors
-      requestStatsService.recordFailure(req.body.provider, req.body.model, req.body, errorDetail, 500);
+      requestStatsService.recordFailure(p, m, processedRequest || {}, errorDetail, 500);
 
       // Always return 200 to avoid triggering frontend auth redirect
       reply.status(200).send({
