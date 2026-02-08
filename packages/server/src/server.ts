@@ -212,9 +212,10 @@ export const createServer = async (config: any): Promise<any> => {
     // Only add default Authorization if transformer didn't set x-api-key
     // and didn't explicitly set authorization to undefined
     const hasXApiKey = transformerHeaders["x-api-key"] || transformerHeaders["X-API-Key"];
-    const authExplicitlyUndefined = transformerHeaders.authorization === undefined || transformerHeaders.Authorization === undefined;
+    const authExplicitlyRemoved = ("authorization" in transformerHeaders && transformerHeaders.authorization === undefined)
+                               || ("Authorization" in transformerHeaders && transformerHeaders.Authorization === undefined);
 
-    if (!hasXApiKey && !authExplicitlyUndefined) {
+    if (!hasXApiKey && !authExplicitlyRemoved) {
       headers.Authorization = `Bearer ${apiKey}`;
     }
 
