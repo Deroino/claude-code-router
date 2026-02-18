@@ -5,21 +5,37 @@
  */
 
 import { EventEmitter } from 'events';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { dirname } from 'path';
+
+export interface LastRequestInfo {
+  timestamp: string;
+  request: any;
+}
+
+export interface LastSuccessInfo extends LastRequestInfo {
+  response: any;
+}
+
+export interface LastFailureInfo extends LastRequestInfo {
+  error: string;
+  statusCode?: number;
+}
 
 export interface RequestStats {
   success: number;
   fail: number;
-  lastRequest?: {
-    timestamp: string;
-    request: any;
-    response?: any;
-    error?: string;
-    statusCode?: number;
-  };
+  lastSuccessRequest?: LastSuccessInfo;
+  lastFailureRequest?: LastFailureInfo;
+  /** @deprecated Use lastSuccessRequest or lastFailureRequest */
+  lastRequest?: LastSuccessInfo | LastFailureInfo;
 }
 
 export class RequestStatsService extends EventEmitter {
   private stats: Map<string, RequestStats> = new Map();
+  private persistTimer: NodeJS.Timeout | null = null;
+  private dirty: boolean = false;
+  private statsFilePath: string = '';
 
   constructor() {
     super();
@@ -37,30 +53,121 @@ export class RequestStatsService extends EventEmitter {
   recordSuccess(provider: string, model: string, request: any, response: any): void {
     const key = this.buildKey(provider, model);
     const existing = this.stats.get(key) || { success: 0, fail: 0 };
-    const newStats = {
+    const lastSuccessRequest: LastSuccessInfo = {
+      timestamp: new Date().toISOString(), request, response
+    };
+    const newStats: RequestStats = {
       success: existing.success + 1,
       fail: existing.fail,
-      lastRequest: { timestamp: new Date().toISOString(), request, response }
+      lastSuccessRequest,
+      lastFailureRequest: existing.lastFailureRequest,
+      lastRequest: lastSuccessRequest // backward compat
     };
     this.stats.set(key, newStats);
+    this.dirty = true;
     this.emit('stats_update', { key, stats: newStats });
   }
 
   recordFailure(provider: string, model: string, request: any, error: string, statusCode?: number): void {
     const key = this.buildKey(provider, model);
     const existing = this.stats.get(key) || { success: 0, fail: 0 };
-    const newStats = {
+    const lastFailureRequest: LastFailureInfo = {
+      timestamp: new Date().toISOString(), request, error, statusCode
+    };
+    const newStats: RequestStats = {
       success: existing.success,
       fail: existing.fail + 1,
-      lastRequest: { timestamp: new Date().toISOString(), request, error, statusCode }
+      lastSuccessRequest: existing.lastSuccessRequest,
+      lastFailureRequest,
+      lastRequest: lastFailureRequest // backward compat
     };
     this.stats.set(key, newStats);
+    this.dirty = true;
     this.emit('stats_update', { key, stats: newStats });
   }
 
   clearAll(): void {
     this.stats.clear();
+    this.dirty = true;
+    this.saveToFile(); // immediate save on clear
     this.emit('stats_clear');
+  }
+
+  /**
+   * Initialize persistence with a file path
+   * Call this after construction with the STATS_FILE path
+   */
+  initPersistence(filePath: string): void {
+    this.statsFilePath = filePath;
+    this.loadFromFile();
+    // Sync to file every 30 seconds if dirty
+    this.persistTimer = setInterval(() => {
+      if (this.dirty) {
+        this.saveToFile();
+      }
+    }, 30000);
+  }
+
+  private loadFromFile(): void {
+    if (!this.statsFilePath) return;
+    try {
+      if (existsSync(this.statsFilePath)) {
+        const content = readFileSync(this.statsFilePath, 'utf-8');
+        const data = JSON.parse(content);
+        // Restore from plain object to Map
+        if (data && typeof data === 'object') {
+          for (const [key, value] of Object.entries(data)) {
+            this.stats.set(key, value as RequestStats);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load request stats from file:', error);
+    }
+  }
+
+  private saveToFile(): void {
+    if (!this.statsFilePath) return;
+    try {
+      const dir = dirname(this.statsFilePath);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      // Convert Map to plain object, preserve all fields
+      const data: Record<string, any> = {};
+      this.stats.forEach((value, key) => {
+        data[key] = {
+          success: value.success,
+          fail: value.fail,
+          lastSuccessRequest: value.lastSuccessRequest ? {
+            timestamp: value.lastSuccessRequest.timestamp,
+            request: value.lastSuccessRequest.request,
+            response: value.lastSuccessRequest.response
+          } : undefined,
+          lastFailureRequest: value.lastFailureRequest ? {
+            timestamp: value.lastFailureRequest.timestamp,
+            request: value.lastFailureRequest.request,
+            error: value.lastFailureRequest.error,
+            statusCode: value.lastFailureRequest.statusCode
+          } : undefined
+        };
+      });
+      writeFileSync(this.statsFilePath, JSON.stringify(data, null, 2), 'utf-8');
+      this.dirty = false;
+    } catch (error) {
+      console.error('Failed to save request stats to file:', error);
+    }
+  }
+
+  /**
+   * Call on service shutdown to persist final state
+   */
+  shutdown(): void {
+    if (this.persistTimer) {
+      clearInterval(this.persistTimer);
+      this.persistTimer = null;
+    }
+    this.saveToFile();
   }
 
   private buildKey(provider: string, model: string): string {

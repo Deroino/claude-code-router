@@ -77,26 +77,30 @@ export function Providers({
   const [batchTestResults, setBatchTestResults] = useState<BatchTestResult[]>([]);
   const [isBatchTesting, setIsBatchTesting] = useState<boolean>(false);
 
-  // Load results from localStorage on mount
+  // Load results from server on mount
   useEffect(() => {
-    try {
-      const savedResults = localStorage.getItem('batchTestResults');
-      if (savedResults) {
-        setBatchTestResults(JSON.parse(savedResults));
+    api.getBatchTestResults().then(data => {
+      if (data?.results?.length > 0) {
+        setBatchTestResults(data.results);
       }
-    } catch (e) {
-      console.error('Failed to load batch test results:', e);
-    }
+    }).catch(e => {
+      console.error('Failed to load batch test results from server:', e);
+      // Fallback to localStorage
+      try {
+        const savedResults = localStorage.getItem('batchTestResults');
+        if (savedResults) {
+          setBatchTestResults(JSON.parse(savedResults));
+        }
+      } catch {}
+    });
   }, []);
 
-  // Save results to localStorage whenever they change
+  // Save results to server whenever they change (overwrite previous)
   useEffect(() => {
-    try {
-      if (batchTestResults.length > 0) {
-        localStorage.setItem('batchTestResults', JSON.stringify(batchTestResults));
-      }
-    } catch (e) {
-      console.error('Failed to save batch test results:', e);
+    if (batchTestResults.length > 0) {
+      api.saveBatchTestResults(batchTestResults).catch(e => {
+        console.error('Failed to save batch test results to server:', e);
+      });
     }
   }, [batchTestResults]);
 
@@ -734,6 +738,15 @@ export function Providers({
     if (selectedTests.length === 0) return;
 
     setIsBatchTesting(true);
+    const totalTests = selectedTests.length;
+    let completedCount = 0;
+
+    // Show persistent progress toast
+    const progressToastId = showToast(
+      `Batch testing... [0/${totalTests}]`,
+      'warning',
+      0 // persistent, won't auto-dismiss
+    );
 
     // Create a map for quick lookup of index in main array
     const testIndices = new Map<string, number>();
@@ -759,6 +772,8 @@ export function Providers({
 
       try {
         const result = await api.testModel(provider, model, config?.TEST_PROMPT);
+        completedCount++;
+
         // Update status to success or error
         setBatchTestResults(prev => {
           const updated = [...prev];
@@ -774,8 +789,9 @@ export function Providers({
           }
           return updated;
         });
-        return { success: true };
+        return { success: result?.success ?? false };
       } catch (err) {
+        completedCount++;
         const errorMsg = err instanceof Error ? err.message : "Unknown error";
         // Update status to error
         setBatchTestResults(prev => {
@@ -796,7 +812,19 @@ export function Providers({
     });
 
     // Wait for all tests to complete
-    await Promise.all(testPromises);
+    const results = await Promise.all(testPromises);
+
+    // Remove progress toast and show final result
+    removeToast(progressToastId);
+    const successTotal = results.filter(r => r.success).length;
+    const failTotal = results.filter(r => !r.success).length;
+
+    showToast(
+      `Batch test complete: ${successTotal} passed, ${failTotal} failed (${totalTests} total)`,
+      failTotal > 0 ? 'warning' : 'success',
+      8000
+    );
+
     setIsBatchTesting(false);
   };
 

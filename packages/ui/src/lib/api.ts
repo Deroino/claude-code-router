@@ -373,6 +373,18 @@ class ApiClient {
   async installPresetFromGitHub(repo: string, name?: string): Promise<any> {
     return this.post<any>('/presets/install/github', { repo, name });
   }
+
+  // ========== Batch Test Results API ==========
+
+  // Get batch test results from server
+  async getBatchTestResults(): Promise<{ results: any[] }> {
+    return this.get<{ results: any[] }>('/batch-test-results');
+  }
+
+  // Save batch test results to server (overwrites previous)
+  async saveBatchTestResults(results: any[]): Promise<{ success: boolean }> {
+    return this.put<{ success: boolean }>('/batch-test-results', { results });
+  }
 }
 
 // Create a default instance of the API client

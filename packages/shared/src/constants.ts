@@ -11,6 +11,10 @@ export const PRESETS_DIR = path.join(HOME_DIR, "presets");
 
 export const PID_FILE = path.join(HOME_DIR, '.claude-code-router.pid');
 
+export const STATS_FILE = path.join(HOME_DIR, "request-stats.json");
+
+export const BATCH_TEST_RESULTS_FILE = path.join(HOME_DIR, "batch-test-results.json");
+
 export const REFERENCE_COUNT_FILE = path.join(os.tmpdir(), "claude-code-reference-count.txt");
 
 // Claude projects directory

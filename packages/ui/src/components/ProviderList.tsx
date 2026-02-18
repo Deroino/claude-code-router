@@ -56,14 +56,16 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
   const stats = requestStats?.find(s => s.provider === providerName && s.model === model);
   const successCount = stats?.success || 0;
   const failCount = stats?.fail || 0;
-  const lastRequest = stats?.lastRequest;
+  const lastSuccessRequest = stats?.lastSuccessRequest;
+  const lastFailureRequest = stats?.lastFailureRequest;
 
-  // Determine badge background color based on last request result
+  // Determine badge background color based on most recent event
   const getBadgeBackgroundClass = () => {
-    if (!lastRequest) return 'bg-white';
-    // Debug: check if error exists
-    console.log('Badge color check:', { provider: providerName, model, lastRequest });
-    return lastRequest.error ? 'bg-red-200' : 'bg-green-200';
+    if (!lastSuccessRequest && !lastFailureRequest) return 'bg-white';
+    // Compare timestamps: show color based on most recent event
+    const successTime = lastSuccessRequest ? new Date(lastSuccessRequest.timestamp).getTime() : 0;
+    const failureTime = lastFailureRequest ? new Date(lastFailureRequest.timestamp).getTime() : 0;
+    return failureTime > successTime ? 'bg-red-200' : 'bg-green-200';
   };
 
   const handleCopy = async () => {
@@ -186,31 +188,31 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
           <TooltipContent side="bottom" align="start" className="max-w-2xl max-h-[500px] overflow-y-auto z-[99999] bg-white/95 backdrop-blur-sm border border-gray-200 shadow-2xl text-gray-900">
             <div className="space-y-2">
               <div className="font-semibold text-sm text-gray-900">Last Successful Request</div>
-              {lastRequest && !lastRequest.error ? (
+              {lastSuccessRequest ? (
                 <div className="space-y-2">
                   <div className="text-xs text-gray-600">
-                    Timestamp: {new Date(lastRequest.timestamp).toLocaleString()}
+                    Timestamp: {new Date(lastSuccessRequest.timestamp).toLocaleString()}
                   </div>
                   <div>
                     <div className="font-semibold text-xs mb-1 text-gray-900">Request:</div>
                     <pre
                       className="bg-gray-50 border border-gray-200 p-2 rounded text-xs overflow-auto max-h-32 text-gray-900 cursor-pointer hover:bg-gray-100 transition-colors"
-                      onClick={(e) => handleCopyContent(lastRequest.request, 'Request', e)}
+                      onClick={(e) => handleCopyContent(lastSuccessRequest.request, 'Request', e)}
                       title="Click to copy request"
                     >
-                      {JSON.stringify(lastRequest.request, null, 2)}
+                      {JSON.stringify(lastSuccessRequest.request, null, 2)}
                     </pre>
                   </div>
                   <div>
                     <div className="font-semibold text-xs mb-1 text-gray-900">Response:</div>
                     <pre
-                      className={`${lastRequest.response && typeof lastRequest.response === 'object' && 'error' in lastRequest.response ? 'bg-yellow-50 border-yellow-200 hover:bg-yellow-100' : 'bg-gray-50 border-gray-200 hover:bg-gray-100'} border p-2 rounded text-xs overflow-auto max-h-32 text-gray-900 cursor-pointer transition-colors`}
-                      onClick={(e) => handleCopyContent(lastRequest.response, 'Response', e)}
+                      className={`${lastSuccessRequest.response && typeof lastSuccessRequest.response === 'object' && 'error' in lastSuccessRequest.response ? 'bg-yellow-50 border-yellow-200 hover:bg-yellow-100' : 'bg-gray-50 border-gray-200 hover:bg-gray-100'} border p-2 rounded text-xs overflow-auto max-h-32 text-gray-900 cursor-pointer transition-colors`}
+                      onClick={(e) => handleCopyContent(lastSuccessRequest.response, 'Response', e)}
                       title="Click to copy response"
                     >
-                      {JSON.stringify(lastRequest.response, null, 2)}
+                      {JSON.stringify(lastSuccessRequest.response, null, 2)}
                     </pre>
-                    {lastRequest.response && typeof lastRequest.response === 'object' && 'error' in lastRequest.response && (
+                    {lastSuccessRequest.response && typeof lastSuccessRequest.response === 'object' && 'error' in lastSuccessRequest.response && (
                       <div className="text-xs text-yellow-600 mt-1 italic">
                         ⚠️ Response reading failed - HTTP request succeeded but response body could not be parsed
                       </div>
@@ -235,52 +237,40 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
           <TooltipContent side="bottom" align="start" className="max-w-2xl max-h-[500px] overflow-y-auto z-[99999] bg-white/95 backdrop-blur-sm border border-gray-200 shadow-2xl text-gray-900">
             <div className="space-y-2">
               <div className="font-semibold text-sm text-gray-900">Last Failed Request</div>
-              {lastRequest && lastRequest.error ? (
+              {lastFailureRequest ? (
                 <div className="space-y-2">
                   <div className="text-xs text-gray-600">
-                    Timestamp: {new Date(lastRequest.timestamp).toLocaleString()}
+                    Timestamp: {new Date(lastFailureRequest.timestamp).toLocaleString()}
                   </div>
-                  {lastRequest.statusCode && (
+                  {lastFailureRequest.statusCode && (
                     <div className="text-xs text-gray-600">
-                      Status Code: {lastRequest.statusCode}
+                      Status Code: {lastFailureRequest.statusCode}
                     </div>
                   )}
                   <div>
                     <div className="font-semibold text-xs mb-1 text-gray-900">Request:</div>
                     <pre
                       className="bg-gray-50 border border-gray-200 p-2 rounded text-xs overflow-auto max-h-24 text-gray-900 cursor-pointer hover:bg-gray-100 transition-colors"
-                      onClick={(e) => handleCopyContent(lastRequest.request, 'Request', e)}
+                      onClick={(e) => handleCopyContent(lastFailureRequest.request, 'Request', e)}
                       title="Click to copy request"
                     >
-                      {JSON.stringify(lastRequest.request, null, 2)}
+                      {JSON.stringify(lastFailureRequest.request, null, 2)}
                     </pre>
                   </div>
                   <div>
                     <div className="font-semibold text-xs mb-1 text-red-600">Error:</div>
                     <pre
                       className="bg-red-50 border border-red-200 p-2 rounded text-xs overflow-auto max-h-32 text-red-700 cursor-pointer hover:bg-red-100 transition-colors"
-                      onClick={(e) => handleCopyContent(lastRequest.error, 'Error', e)}
+                      onClick={(e) => handleCopyContent(lastFailureRequest.error, 'Error', e)}
                       title="Click to copy error"
                     >
                       {(() => {
-                        const error = lastRequest.error;
-                        // If error is an object, stringify with formatting
+                        const error = lastFailureRequest.error;
                         if (typeof error === 'object') {
-                          try {
-                            return JSON.stringify(error, null, 2);
-                          } catch {
-                            return String(error);
-                          }
+                          try { return JSON.stringify(error, null, 2); } catch { return String(error); }
                         }
-                        // If error is a string, try to parse as JSON then re-stringify for formatting
                         if (typeof error === 'string') {
-                          try {
-                            const parsed = JSON.parse(error);
-                            return JSON.stringify(parsed, null, 2);
-                          } catch {
-                            // Not JSON, return as is
-                            return error;
-                          }
+                          try { return JSON.stringify(JSON.parse(error), null, 2); } catch { return error; }
                         }
                         return String(error);
                       })()}

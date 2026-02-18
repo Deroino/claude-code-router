@@ -5,7 +5,7 @@ import { join } from "path";
 import { initConfig, initDir } from "./utils";
 import { createServer } from "./server";
 import { apiKeyAuth } from "./middleware/auth";
-import { CONFIG_FILE, HOME_DIR, listPresets } from "@CCR/shared";
+import { CONFIG_FILE, HOME_DIR, listPresets, STATS_FILE } from "@CCR/shared";
 import { createStream } from 'rotating-file-stream';
 import { sessionUsageCache } from "@musistudio/llms";
 import { SSEParserTransform } from "./utils/SSEParser.transform";
@@ -453,6 +453,24 @@ async function run() {
 
     return { success: true, message: "Service restart initiated" }
   });
+
+  // Initialize request stats persistence
+  try {
+    // @ts-ignore - requestStatsService is exported but not in type definitions
+    const { requestStatsService } = await import("@musistudio/llms");
+    requestStatsService.initPersistence(STATS_FILE);
+
+    // Add shutdown hooks for graceful persistence
+    const shutdownHandler = () => {
+      requestStatsService.shutdown();
+    };
+    process.on('SIGTERM', shutdownHandler);
+    process.on('SIGINT', shutdownHandler);
+    process.on('beforeExit', shutdownHandler);
+  } catch (error) {
+    console.error('Failed to initialize request stats persistence:', error);
+  }
+
   await server.start();
 }
 

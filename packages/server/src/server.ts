@@ -1403,6 +1403,37 @@ export const createServer = async (config: any): Promise<any> => {
     }
   });
 
+  // Batch test results persistence - GET
+  app.get("/api/batch-test-results", async (req: any, reply: any) => {
+    try {
+      const { BATCH_TEST_RESULTS_FILE } = await import("@CCR/shared");
+      if (existsSync(BATCH_TEST_RESULTS_FILE)) {
+        const content = readFileSync(BATCH_TEST_RESULTS_FILE, 'utf-8');
+        return JSON.parse(content);
+      }
+      return { results: [] };
+    } catch (error) {
+      console.error("Failed to read batch test results:", error);
+      return { results: [] };
+    }
+  });
+
+  // Batch test results persistence - PUT (overwrite)
+  app.put("/api/batch-test-results", async (req: any, reply: any) => {
+    try {
+      const { BATCH_TEST_RESULTS_FILE } = await import("@CCR/shared");
+      if (!existsSync(HOME_DIR)) {
+        mkdirSync(HOME_DIR, { recursive: true });
+      }
+      const body = req.body as { results: any[] };
+      writeFileSync(BATCH_TEST_RESULTS_FILE, JSON.stringify(body, null, 2), 'utf-8');
+      return { success: true };
+    } catch (error) {
+      console.error("Failed to save batch test results:", error);
+      reply.status(500).send({ error: "Failed to save batch test results" });
+    }
+  });
+
   // Watch config file for external changes
   try {
     // Get ConfigService instance for hot-reload support

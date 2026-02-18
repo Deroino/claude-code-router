@@ -1,18 +1,28 @@
 import { useState, useEffect } from 'react';
 
+export interface LastSuccessInfo {
+  timestamp: string;
+  request: any;
+  response: any;
+}
+
+export interface LastFailureInfo {
+  timestamp: string;
+  request: any;
+  error: string;
+  statusCode?: number;
+}
+
 export interface RequestStatsItem {
   key: string;
   provider: string;
   model: string;
   success: number;
   fail: number;
-  lastRequest?: {
-    timestamp: string;
-    request: any;
-    response?: any;
-    error?: string;
-    statusCode?: number;
-  };
+  lastSuccessRequest?: LastSuccessInfo;
+  lastFailureRequest?: LastFailureInfo;
+  /** @deprecated backward compat */
+  lastRequest?: any;
 }
 
 export function useRequestStats() {
