@@ -430,10 +430,12 @@
     "providers": "Providers",
     "router": "Router",
     "transformers": "Transformers",
+    "groups": "Groups",
     "monitor": "Monitor",
     "tooltip_providers": "Toggle Providers Panel",
     "tooltip_router": "Toggle Router Panel",
     "tooltip_transformers": "Toggle Transformers Panel",
+    "tooltip_groups": "Toggle Model Groups Panel",
     "tooltip_monitor": "Toggle Model Monitor Panel"
   },
   "model_selector": {
@@ -446,5 +448,26 @@
     "selected_count": "{{selected}} / {{total}} models selected",
     "cancel": "Cancel",
     "confirm": "Confirm Add ({{count}})"
+  },
+  "groups": {
+    "title": "Model Groups",
+    "add": "Add Group",
+    "edit": "Edit Model Group",
+    "delete": "Delete Model Group",
+    "delete_confirm": "Are you sure you want to delete this model group?",
+    "name": "Group Name",
+    "name_placeholder": "Enter group name (letters, numbers, underscores, hyphens)",
+    "name_required": "Group name is required",
+    "name_duplicate": "A group with this name already exists",
+    "name_invalid": "Group name can only contain letters, numbers, underscores and hyphens",
+    "models": "Models",
+    "add_model": "Add Model",
+    "no_models": "No models",
+    "models_required": "At least one model is required",
+    "select_model": "Select a model to add...",
+    "search_model": "Search model...",
+    "no_groups": "No model groups created yet",
+    "in_use_warning": "This group is currently in use by router",
+    "model_already_added": "This model is already in the group"
   }
 }

@@ -429,10 +429,12 @@
     "providers": "供应商",
     "router": "路由",
     "transformers": "转换器",
+    "groups": "模型组",
     "monitor": "监控",
     "tooltip_providers": "切换供应商面板",
     "tooltip_router": "切换路由面板",
     "tooltip_transformers": "切换转换器面板",
+    "tooltip_groups": "切换模型组面板",
     "tooltip_monitor": "切换模型监控面板"
   },
   "model_selector": {
@@ -445,5 +447,26 @@
     "selected_count": "已选择 {{selected}} / {{total}} 个模型",
     "cancel": "取消",
     "confirm": "确认添加 ({{count}})"
+  },
+  "groups": {
+    "title": "模型组",
+    "add": "添加组",
+    "edit": "编辑模型组",
+    "delete": "删除模型组",
+    "delete_confirm": "确定要删除此模型组吗？",
+    "name": "组名",
+    "name_placeholder": "输入组名（字母、数字、下划线、连字符）",
+    "name_required": "组名为必填项",
+    "name_duplicate": "已存在同名组",
+    "name_invalid": "组名只能包含字母、数字、下划线和连字符",
+    "models": "组内模型",
+    "add_model": "添加模型",
+    "no_models": "暂无模型",
+    "models_required": "至少需要一个模型",
+    "select_model": "选择要添加的模型...",
+    "search_model": "搜索模型...",
+    "no_groups": "暂未创建模型组",
+    "in_use_warning": "此组正在被路由场景使用",
+    "model_already_added": "该模型已添加到组中"
   }
 }

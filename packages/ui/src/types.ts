@@ -29,6 +29,11 @@ export interface Transformer {
     options?: Record<string, any>;
 }
 
+export interface ModelGroup {
+  name: string;
+  models: string[]; // Each item is "providerName,modelName" format
+}
+
 export interface StatusLineModuleConfig {
   type: string;
   icon?: string;
@@ -54,6 +59,7 @@ export interface Config {
   Providers: Provider[];
   Router: RouterConfig;
   transformers: Transformer[];
+  ModelGroups?: ModelGroup[];
   StatusLine?: StatusLineConfig;
   forceUseImageAgent?: boolean;
   noAuth?: boolean;

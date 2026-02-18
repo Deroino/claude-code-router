@@ -7,6 +7,7 @@ import { CLAUDE_PROJECTS_DIR, HOME_DIR } from "@CCR/shared";
 import { LRUCache } from "lru-cache";
 import { ConfigService } from "../services/config";
 import { TokenizerService } from "../services/tokenizer";
+import type { ModelGroup } from "../types/llm";
 
 // Types from @anthropic-ai/sdk
 interface Tool {
@@ -231,6 +232,38 @@ export interface RouterFallbackConfig {
   webSearch?: string[];
 }
 
+// Round-robin index for model groups
+const groupRotationIndex = new Map<string, number>();
+
+/**
+ * Resolve a model group name to a specific "provider,model" string using round-robin.
+ * Returns null if the group is not found or is empty.
+ */
+function resolveModelGroup(
+  groupName: string,
+  configService: ConfigService,
+  req: any
+): string | null {
+  const groups = configService.get<ModelGroup[]>("ModelGroups") || [];
+  const group = groups.find(g => g.name === groupName);
+
+  if (!group) {
+    req.log.error(`ModelGroup '${groupName}' not found`);
+    return null;
+  }
+  if (!group.models || group.models.length === 0) {
+    req.log.error(`ModelGroup '${groupName}' has no models`);
+    return null;
+  }
+
+  let index = groupRotationIndex.get(groupName) || 0;
+  const selectedModel = group.models[index % group.models.length];
+  groupRotationIndex.set(groupName, index + 1);
+
+  req.log.info(`ModelGroup '${groupName}' selected: ${selectedModel} (index: ${index})`);
+  return selectedModel;
+}
+
 export const router = async (req: any, _res: any, context: RouterContext) => {
   // --- vvv TEMPORARY DEBUGGING CODE vvv ---
   const MAGIC_CODE = "CCR_DEBUG_COMPACT_REQUEST"; // 我们约定的魔法代码
@@ -333,6 +366,27 @@ export const router = async (req: any, _res: any, context: RouterContext) => {
       // Custom router doesn't provide scenario type, default to 'default'
       req.scenarioType = 'default';
     }
+
+    // Resolve ModelGroup if model starts with "group:" prefix
+    if (model && model.startsWith('group:')) {
+      const groupName = model.substring(6);
+      const resolved = resolveModelGroup(groupName, configService, req);
+      if (resolved) {
+        model = resolved;
+      } else {
+        // Group resolution failed, fall back to Router.default
+        const Router = configService.get<any>("Router");
+        const defaultModel = Router?.default;
+        // Avoid infinite recursion if default itself is a group
+        if (defaultModel && !defaultModel.startsWith('group:')) {
+          model = defaultModel;
+          req.log.warn(`ModelGroup '${groupName}' resolution failed, falling back to default: ${defaultModel}`);
+        } else {
+          req.log.error(`Cannot resolve ModelGroup '${groupName}' and no valid default model available`);
+        }
+      }
+    }
+
     req.body.model = model;
   } catch (error: any) {
     req.log.error(`Error in router middleware: ${error.message}`);

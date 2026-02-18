@@ -239,3 +239,8 @@ export interface ConfigProvider {
   };
   tokenizer?: ProviderTokenizerConfig;
 }
+
+export interface ModelGroup {
+  name: string;
+  models: string[]; // Each item is "providerName,modelName" format
+}

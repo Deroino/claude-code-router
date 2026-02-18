@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { Transformers } from "@/components/Transformers";
+import { ModelGroups } from "@/components/ModelGroups";
 import { Providers } from "@/components/Providers";
 import { Router } from "@/components/Router";
 import { JsonEditor } from "@/components/JsonEditor";
@@ -25,6 +26,7 @@ import {
   Server,
   Route,
   Workflow,
+  Layers,
   LayoutDashboard
 } from "lucide-react";
 import {
@@ -58,6 +60,7 @@ function App() {
   const [showProviders, setShowProviders] = useState(true);
   const [showRouter, setShowRouter] = useState(false);
   const [showTransformers, setShowTransformers] = useState(false);
+  const [showModelGroups, setShowModelGroups] = useState(false);
   const [showModelMonitor, setShowModelMonitor] = useState(true);
 
   // Hover model state for cross-component highlighting
@@ -412,6 +415,22 @@ function App() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
+                  variant={showModelGroups ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setShowModelGroups(!showModelGroups)}
+                  className="transition-all-ease hover:scale-[1.02]"
+                >
+                  <Layers className="h-4 w-4 mr-1.5" />
+                  {t('navbar.groups')}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{t('navbar.tooltip_groups')}</p>
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
                   variant={showModelMonitor ? "default" : "ghost"}
                   size="sm"
                   onClick={() => setShowModelMonitor(!showModelMonitor)}
@@ -544,12 +563,17 @@ function App() {
           </div>
         )}
 
-        {/* Middle Column: Router + Transformers */}
-        {(showRouter || showTransformers) && (
+        {/* Middle Column: Router + Model Groups + Transformers */}
+        {(showRouter || showTransformers || showModelGroups) && (
           <div className="flex flex-1 flex-col gap-4 min-w-0 animate-slide-in">
             {showRouter && (
               <div className="flex-1 min-h-0">
                 <Router hoveredModel={hoveredModel} onHoverModel={handleHoverModel} requestStats={requestStats} />
+              </div>
+            )}
+            {showModelGroups && (
+              <div className="flex-1 min-h-0">
+                <ModelGroups requestStats={requestStats} />
               </div>
             )}
             {showTransformers && (

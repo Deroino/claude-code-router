@@ -1,0 +1,361 @@
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Combobox } from "@/components/ui/combobox";
+import { Plus, Pencil, Trash2, X, Layers } from "lucide-react";
+import { useConfig } from "./ConfigProvider";
+import type { ModelGroup, Provider } from "@/types";
+import type { RequestStatsItem } from "@/hooks/useRequestStats";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
+interface ModelGroupsProps {
+  requestStats?: RequestStatsItem[];
+}
+
+const GROUP_NAME_REGEX = /^[a-zA-Z0-9_-]+$/;
+
+export function ModelGroups({ requestStats }: ModelGroupsProps) {
+  const { t } = useTranslation();
+  const { config, setConfig } = useConfig();
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editingData, setEditingData] = useState<ModelGroup | null>(null);
+  const [deletingIndex, setDeletingIndex] = useState<number | null>(null);
+  const [isNew, setIsNew] = useState(false);
+  const [nameError, setNameError] = useState<string>("");
+
+  if (!config) {
+    return (
+      <Card className="flex h-full flex-col rounded-lg border shadow-sm">
+        <CardHeader className="flex flex-row items-center justify-between border-b p-4">
+          <CardTitle className="text-lg">{t("groups.title")}</CardTitle>
+        </CardHeader>
+        <CardContent className="flex-grow flex items-center justify-center p-4">
+          <div className="text-gray-500">Loading...</div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const groups: ModelGroup[] = Array.isArray(config.ModelGroups) ? config.ModelGroups : [];
+  const providers: Provider[] = Array.isArray(config.Providers) ? config.Providers : [];
+
+  // Generate model options from providers (same pattern as Router.tsx)
+  const modelOptions = providers.flatMap((provider) => {
+    if (!provider) return [];
+    const models = Array.isArray(provider.models) ? provider.models : [];
+    const providerName = provider.name || "Unknown Provider";
+    return models.map((model) => ({
+      value: `${providerName},${model || "Unknown Model"}`,
+      label: `${providerName}, ${model || "Unknown Model"}`,
+    }));
+  });
+
+  // Check if a group name is used in Router config
+  const getGroupUsageScenarios = (groupName: string): string[] => {
+    const router = config.Router;
+    if (!router) return [];
+    const scenarios: string[] = [];
+    const groupRef = `group:${groupName}`;
+    if (router.default === groupRef) scenarios.push("default");
+    if (router.background === groupRef) scenarios.push("background");
+    if (router.think === groupRef) scenarios.push("think");
+    if (router.longContext === groupRef) scenarios.push("longContext");
+    if (router.webSearch === groupRef) scenarios.push("webSearch");
+    if (router.image === groupRef) scenarios.push("image");
+    if (router.compact === groupRef) scenarios.push("compact");
+    return scenarios;
+  };
+
+  const handleAdd = () => {
+    setEditingData({ name: "", models: [] });
+    setEditingIndex(groups.length);
+    setIsNew(true);
+    setNameError("");
+  };
+
+  const handleEdit = (index: number) => {
+    setEditingData(JSON.parse(JSON.stringify(groups[index])));
+    setEditingIndex(index);
+    setIsNew(false);
+    setNameError("");
+  };
+
+  const handleDelete = (index: number) => {
+    const newGroups = [...groups];
+    newGroups.splice(index, 1);
+    setConfig({ ...config, ModelGroups: newGroups });
+    setDeletingIndex(null);
+  };
+
+  const validateName = (name: string): boolean => {
+    if (!name.trim()) {
+      setNameError(t("groups.name_required"));
+      return false;
+    }
+    if (!GROUP_NAME_REGEX.test(name)) {
+      setNameError(t("groups.name_invalid"));
+      return false;
+    }
+    // Check duplicate (exclude current editing group)
+    const isDuplicate = groups.some(
+      (g, i) => g.name === name && i !== (isNew ? -1 : editingIndex)
+    );
+    if (isDuplicate) {
+      setNameError(t("groups.name_duplicate"));
+      return false;
+    }
+    setNameError("");
+    return true;
+  };
+
+  const handleSave = () => {
+    if (!editingData || editingIndex === null) return;
+    if (!validateName(editingData.name)) return;
+
+    const newGroups = [...groups];
+    if (isNew) {
+      newGroups.push(editingData);
+    } else {
+      newGroups[editingIndex] = editingData;
+    }
+    setConfig({ ...config, ModelGroups: newGroups });
+    setEditingIndex(null);
+    setEditingData(null);
+    setIsNew(false);
+  };
+
+  const handleCancel = () => {
+    setEditingIndex(null);
+    setEditingData(null);
+    setIsNew(false);
+    setNameError("");
+  };
+
+  const handleAddModel = (modelValue: string) => {
+    if (!editingData) return;
+    if (editingData.models.includes(modelValue)) return;
+    setEditingData({
+      ...editingData,
+      models: [...editingData.models, modelValue],
+    });
+  };
+
+  const handleRemoveModel = (modelValue: string) => {
+    if (!editingData) return;
+    setEditingData({
+      ...editingData,
+      models: editingData.models.filter((m) => m !== modelValue),
+    });
+  };
+
+  return (
+    <Card className="flex h-full flex-col rounded-lg border shadow-sm">
+      <CardHeader className="flex flex-row items-center justify-between border-b p-4">
+        <CardTitle className="text-lg">
+          {t("groups.title")}{" "}
+          <span className="text-sm font-normal text-gray-500">
+            ({groups.length})
+          </span>
+        </CardTitle>
+        <Button onClick={handleAdd} size="sm">
+          <Plus className="h-4 w-4 mr-1.5" />
+          {t("groups.add")}
+        </Button>
+      </CardHeader>
+
+      <CardContent className="flex-grow overflow-y-auto p-4">
+        {groups.length === 0 ? (
+          <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+            {t("groups.no_groups")}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {groups.map((group, index) => {
+              const usageScenarios = getGroupUsageScenarios(group.name);
+              return (
+                <div
+                  key={`${group.name}-${index}`}
+                  className="rounded-md border bg-white p-4 transition-all hover:shadow-md"
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Layers className="h-4 w-4 text-blue-500 shrink-0" />
+                        <p className="font-semibold text-sm truncate">{group.name}</p>
+                        {usageScenarios.length > 0 && (
+                          <Badge variant="outline" className="text-xs text-blue-600 border-blue-200 bg-blue-50 shrink-0">
+                            {usageScenarios.join(", ")}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(group.models || []).map((model) => (
+                          <Badge
+                            key={model}
+                            variant="secondary"
+                            className="text-xs"
+                          >
+                            {model.replace(",", ", ")}
+                          </Badge>
+                        ))}
+                        {(!group.models || group.models.length === 0) && (
+                          <span className="text-xs text-gray-400">{t("groups.no_models")}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="ml-3 flex gap-1 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={() => handleEdit(index)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-red-500 hover:text-red-700"
+                        onClick={() => setDeletingIndex(index)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </CardContent>
+
+      {/* Edit/Create Dialog */}
+      <Dialog open={editingIndex !== null} onOpenChange={handleCancel}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{isNew ? t("groups.add") : t("groups.edit")}</DialogTitle>
+          </DialogHeader>
+          {editingData && (
+            <div className="space-y-4 py-4">
+              {/* Group Name */}
+              <div className="space-y-2">
+                <Label htmlFor="group-name">{t("groups.name")}</Label>
+                <Input
+                  id="group-name"
+                  value={editingData.name}
+                  onChange={(e) => {
+                    setEditingData({ ...editingData, name: e.target.value });
+                    if (nameError) validateName(e.target.value);
+                  }}
+                  placeholder={t("groups.name_placeholder")}
+                  className={nameError ? "border-red-500" : ""}
+                />
+                {nameError && (
+                  <p className="text-sm text-red-500">{nameError}</p>
+                )}
+              </div>
+
+              {/* Model Selection */}
+              <div className="space-y-2">
+                <Label>{t("groups.models")}</Label>
+                <Combobox
+                  options={modelOptions.filter(
+                    (opt) => !editingData.models.includes(opt.value)
+                  )}
+                  value=""
+                  onChange={(value) => {
+                    if (value) handleAddModel(value);
+                  }}
+                  placeholder={t("groups.select_model")}
+                  searchPlaceholder={t("groups.search_model")}
+                  emptyPlaceholder={t("router.noModelFound")}
+                />
+              </div>
+
+              {/* Selected Models List */}
+              <div className="space-y-2">
+                {editingData.models.length === 0 ? (
+                  <p className="text-sm text-gray-400 text-center py-3">
+                    {t("groups.no_models")}
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {editingData.models.map((model) => (
+                      <Badge
+                        key={model}
+                        variant="outline"
+                        className="flex items-center gap-1 pr-1 py-1"
+                      >
+                        <span className="text-xs">{model.replace(",", ", ")}</span>
+                        <button
+                          onClick={() => handleRemoveModel(model)}
+                          className="ml-0.5 rounded-full p-0.5 hover:bg-gray-200 transition-colors"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={handleCancel}>
+              {t("app.cancel")}
+            </Button>
+            <Button onClick={handleSave}>{t("app.save")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog
+        open={deletingIndex !== null}
+        onOpenChange={() => setDeletingIndex(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("groups.delete")}</DialogTitle>
+            <DialogDescription>
+              {t("groups.delete_confirm")}
+              {deletingIndex !== null &&
+                getGroupUsageScenarios(groups[deletingIndex]?.name || "").length > 0 && (
+                  <span className="block mt-2 text-amber-600 font-medium">
+                    ⚠️ {t("groups.in_use_warning")}
+                  </span>
+                )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeletingIndex(null)}
+            >
+              {t("app.cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() =>
+                deletingIndex !== null && handleDelete(deletingIndex)
+              }
+            >
+              {t("app.delete")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}

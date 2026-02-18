@@ -58,6 +58,12 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
     console.log('[Router] handleLabelHover called:', { modelValue, hasCallback: !!onHoverModel });
     if (!onHoverModel) return;
 
+    // Group references don't trigger single model highlighting
+    if (modelValue && modelValue.startsWith('group:')) {
+      onHoverModel(null, null);
+      return;
+    }
+
     if (modelValue && modelValue.includes(',')) {
       const [provider, ...modelParts] = modelValue.split(',');
       const model = modelParts.join(','); // Handle model names that might contain commas
@@ -80,6 +86,12 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
   const handleComboboxItemHover = (modelValue: string | null) => {
     console.log('[Router] handleComboboxItemHover called:', { modelValue, hasCallback: !!onHoverModel });
     if (!onHoverModel) return;
+
+    // Group references don't trigger single model highlighting
+    if (modelValue && modelValue.startsWith('group:')) {
+      onHoverModel(null, null);
+      return;
+    }
 
     if (modelValue && modelValue.includes(',')) {
       const [provider, ...modelParts] = modelValue.split(',');
@@ -132,6 +144,17 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
     });
   }).sort((a, b) => b.successCount - a.successCount); // Sort by success count descending
 
+  // Generate group options from ModelGroups config
+  const groups = Array.isArray(config.ModelGroups) ? config.ModelGroups : [];
+  const groupOptions = groups.map(group => ({
+    value: `group:${group.name}`,
+    label: `⊞ ${group.name} (${group.models?.length || 0})`,
+    status: 'neutral' as const,
+    successCount: 0,
+    isGroup: true,
+  }));
+  const allOptions = [...groupOptions, ...modelOptions];
+
   // Construct the hovered value for highlighting
   const hoveredValue = hoveredModel?.provider && hoveredModel?.model
     ? `${hoveredModel.provider},${hoveredModel.model}`
@@ -152,7 +175,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
             {t("router.default")}
           </Label>
           <Combobox
-            options={modelOptions}
+            options={allOptions}
             value={routerConfig.default || ""}
             onChange={(value) => handleRouterChange("default", value)}
             placeholder={t("router.selectModel")}
@@ -171,7 +194,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
             {t("router.background")}
           </Label>
           <Combobox
-            options={modelOptions}
+            options={allOptions}
             value={routerConfig.background || ""}
             onChange={(value) => handleRouterChange("background", value)}
             placeholder={t("router.selectModel")}
@@ -190,7 +213,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
             {t("router.think")}
           </Label>
           <Combobox
-            options={modelOptions}
+            options={allOptions}
             value={routerConfig.think || ""}
             onChange={(value) => handleRouterChange("think", value)}
             placeholder={t("router.selectModel")}
@@ -211,7 +234,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
                 {t("router.longContext")}
               </Label>
               <Combobox
-                options={modelOptions}
+                options={allOptions}
                 value={routerConfig.longContext || ""}
                 onChange={(value) => handleRouterChange("longContext", value)}
                 placeholder={t("router.selectModel")}
@@ -241,7 +264,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
             {t("router.webSearch")}
           </Label>
           <Combobox
-            options={modelOptions}
+            options={allOptions}
             value={routerConfig.webSearch || ""}
             onChange={(value) => handleRouterChange("webSearch", value)}
             placeholder={t("router.selectModel")}
@@ -262,7 +285,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
                 {t("router.image")} (beta)
               </Label>
               <Combobox
-                options={modelOptions}
+                options={allOptions}
                 value={routerConfig.image || ""}
                 onChange={(value) => handleRouterChange("image", value)}
                 placeholder={t("router.selectModel")}
@@ -295,7 +318,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
             {t("router.compact")}
           </Label>
           <Combobox
-            options={modelOptions}
+            options={allOptions}
             value={routerConfig.compact || ""}
             onChange={(value) => handleRouterChange("compact", value)}
             placeholder={t("router.selectModel")}

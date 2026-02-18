@@ -24,6 +24,7 @@ interface ComboboxOption {
   value: string;
   status?: 'success' | 'error' | 'neutral';
   successCount?: number;
+  isGroup?: boolean;
 }
 
 interface ComboboxProps {
@@ -112,6 +113,7 @@ export function Combobox({
                   }}
                   className={cn(
                     "transition-all-ease",
+                    option.isGroup ? "border-l-2 border-blue-400 bg-blue-50/50" : "",
                     getStatusClass(option.status),
                     hoveredValue === option.value ? "bg-blue-100 border-l-2 border-blue-500" : ""
                   )}
