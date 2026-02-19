@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Combobox } from "@/components/ui/combobox";
-import { Plus, Pencil, Trash2, X, Layers } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Layers, Check } from "lucide-react";
 import { useConfig } from "./ConfigProvider";
 import type { ModelGroup, Provider } from "@/types";
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
@@ -49,6 +49,32 @@ export function ModelGroups({ requestStats }: ModelGroupsProps) {
 
   const groups: ModelGroup[] = Array.isArray(config.ModelGroups) ? config.ModelGroups : [];
   const providers: Provider[] = Array.isArray(config.Providers) ? config.Providers : [];
+
+  // Aggregate success/fail counts for a ModelGroup from its child models
+  const getGroupStats = (group: ModelGroup) => {
+    if (!requestStats || !group.models || group.models.length === 0) {
+      return { success: 0, fail: 0, rate: -1 };
+    }
+
+    const totals = group.models.reduce(
+      (acc, modelStr) => {
+        const [provider, ...modelParts] = modelStr.split(',');
+        const model = modelParts.join(',');
+        const stat = requestStats.find(
+          s => s.provider === provider && s.model === model
+        );
+        return {
+          success: acc.success + (stat?.success || 0),
+          fail: acc.fail + (stat?.fail || 0),
+        };
+      },
+      { success: 0, fail: 0 }
+    );
+
+    const total = totals.success + totals.fail;
+    const rate = total > 0 ? Math.round((totals.success / total) * 100) : -1;
+    return { ...totals, rate };
+  };
 
   // Generate model options from providers (same pattern as Router.tsx)
   const modelOptions = providers.flatMap((provider) => {
@@ -183,6 +209,7 @@ export function ModelGroups({ requestStats }: ModelGroupsProps) {
           <div className="space-y-3">
             {groups.map((group, index) => {
               const usageScenarios = getGroupUsageScenarios(group.name);
+              const groupStats = getGroupStats(group);
               return (
                 <div
                   key={`${group.name}-${index}`}
@@ -198,6 +225,28 @@ export function ModelGroups({ requestStats }: ModelGroupsProps) {
                             {usageScenarios.join(", ")}
                           </Badge>
                         )}
+                        {/* Aggregated stats from child models */}
+                        <div className="flex items-center gap-1.5 text-[10px] leading-none font-semibold text-gray-500 shrink-0 ml-auto mr-1">
+                          <div className="flex items-center gap-0.5 px-1 py-0.5 rounded-sm">
+                            <Check className="h-3 w-3 text-emerald-500" />
+                            <span className="text-emerald-600">{groupStats.success}</span>
+                          </div>
+                          <div className="flex items-center gap-0.5 px-1 py-0.5 rounded-sm">
+                            <X className="h-3 w-3 text-rose-500" />
+                            <span className="text-rose-600">{groupStats.fail}</span>
+                          </div>
+                          {groupStats.rate >= 0 && (
+                            <div className={`px-1.5 py-0.5 rounded-sm text-[10px] font-bold ${
+                              groupStats.rate >= 80
+                                ? 'text-emerald-600 bg-emerald-50'
+                                : groupStats.rate >= 50
+                                  ? 'text-amber-600 bg-amber-50'
+                                  : 'text-rose-600 bg-rose-50'
+                            }`}>
+                              {groupStats.rate}%
+                            </div>
+                          )}
+                        </div>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
                         {(group.models || []).map((model) => (

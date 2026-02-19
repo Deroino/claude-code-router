@@ -117,7 +117,8 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
             image: '',
             compact: ''
           },
-          CUSTOM_ROUTER_PATH: typeof data.CUSTOM_ROUTER_PATH === 'string' ? data.CUSTOM_ROUTER_PATH : ''
+          CUSTOM_ROUTER_PATH: typeof data.CUSTOM_ROUTER_PATH === 'string' ? data.CUSTOM_ROUTER_PATH : '',
+          ModelGroups: Array.isArray(data.ModelGroups) ? data.ModelGroups : undefined
         };
         
         setConfig(validConfig);
@@ -150,7 +151,8 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
               image: '',
               compact: ''
             },
-            CUSTOM_ROUTER_PATH: ''
+            CUSTOM_ROUTER_PATH: '',
+            ModelGroups: undefined
           });
           setError(err as Error);
         }

@@ -1,4 +1,5 @@
-import Server, { calculateTokenCount, TokenizerService } from "@musistudio/llms";
+// @ts-ignore - requestStatsService is exported but not in type definitions
+import Server, { calculateTokenCount, TokenizerService, requestStatsService, ConfigService } from "@musistudio/llms";
 import { readConfigFile, writeConfigFile, backupConfigFile } from "./utils";
 import { CONFIG_FILE } from "@CCR/shared";
 import { join } from "path";
@@ -26,7 +27,7 @@ import {
 } from "@CCR/shared";
 import fastifyMultipart from "@fastify/multipart";
 import AdmZip from "adm-zip";
-import { ConfigService } from "@musistudio/llms";
+// requestStatsService and ConfigService are imported at the top level
 
 // Helper functions to detect and handle compressed/garbled error responses
 function isCompressedError(text: string): boolean {
@@ -273,8 +274,7 @@ export const createServer = async (config: any): Promise<any> => {
 
   // Add endpoint to test a specific provider+model
   app.post("/api/model-test", async (req: any, reply: any) => {
-    // @ts-ignore - requestStatsService is exported but not in type definitions
-    const { requestStatsService } = await import("@musistudio/llms");
+    // requestStatsService is imported at the top level
 
     // Declare variables outside try block for catch block access
     let provider: string;
@@ -1278,8 +1278,7 @@ export const createServer = async (config: any): Promise<any> => {
   // Get request stats
   app.get("/api/request-stats", async (req: any, reply: any) => {
     try {
-      // @ts-ignore - requestStatsService is exported but not in type definitions
-      const { requestStatsService } = await import("@musistudio/llms");
+      // requestStatsService is imported at the top level
       const allStats = requestStatsService.getAllStats() as Map<string, any>;
       const statsArray: Array<{ key: string; provider: string; model: string; success: number; fail: number; lastRequest?: any }> = [];
       allStats.forEach((value: any, key: string) => {
@@ -1310,8 +1309,7 @@ export const createServer = async (config: any): Promise<any> => {
     let heartbeatInterval: NodeJS.Timeout | null = null;
     let statsListener: any = null;
     let clearListener: any = null;
-    // @ts-ignore - requestStatsService is exported but not in type definitions
-    const { requestStatsService } = await import("@musistudio/llms");
+    // requestStatsService is imported at the top level
 
     // Send data function
     const send = (data: string) => {
@@ -1393,8 +1391,7 @@ export const createServer = async (config: any): Promise<any> => {
   // Clear request stats
   app.delete("/api/request-stats", async (req: any, reply: any) => {
     try {
-      // @ts-ignore - requestStatsService is exported but not in type definitions
-      const { requestStatsService } = await import("@musistudio/llms");
+      // requestStatsService is imported at the top level
       requestStatsService.clearAll();
       return { success: true, message: "Request stats cleared successfully" };
     } catch (error) {

@@ -87,3 +87,17 @@ ccr statusline
 - External: `@musistudio/llms` (core framework), types in `packages/server/src/types.d.ts`
 - Code comments: **English only**
 - Documentation: Add to docs project, not standalone md files
+
+## UI ConfigProvider (`packages/ui/src/components/ConfigProvider.tsx`)
+
+**Critical**: `fetchConfig` builds a `validConfig` whitelist object. Any new config field **must** be added here, otherwise:
+
+1. Page load constructs `validConfig` without the field
+2. 2-second debounce auto-save writes this incomplete config back to server
+3. Original field data in `config.json` gets overwritten and lost
+
+**When adding a new config field**: Add it to **both** locations in `ConfigProvider.tsx`:
+- `validConfig` object (success path, ~line 77-121)
+- Default fallback config (error path, ~line 130-155)
+
+**When adding a new config field to server**: Make sure `requestStatsService` and other singletons from `@musistudio/llms` use **static top-level imports** in `server.ts` and `index.ts`, not dynamic `await import()` inside route handlers, to avoid potential dual-singleton issues with esbuild bundling.

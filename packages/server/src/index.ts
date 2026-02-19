@@ -7,7 +7,8 @@ import { createServer } from "./server";
 import { apiKeyAuth } from "./middleware/auth";
 import { CONFIG_FILE, HOME_DIR, listPresets, STATS_FILE } from "@CCR/shared";
 import { createStream } from 'rotating-file-stream';
-import { sessionUsageCache } from "@musistudio/llms";
+// @ts-ignore - requestStatsService is exported but not in type definitions
+import { sessionUsageCache, requestStatsService } from "@musistudio/llms";
 import { SSEParserTransform } from "./utils/SSEParser.transform";
 import { SSESerializerTransform } from "./utils/SSESerializer.transform";
 import { rewriteStream } from "./utils/rewriteStream";
@@ -456,8 +457,7 @@ async function run() {
 
   // Initialize request stats persistence
   try {
-    // @ts-ignore - requestStatsService is exported but not in type definitions
-    const { requestStatsService } = await import("@musistudio/llms");
+    // requestStatsService is imported at the top level
     requestStatsService.initPersistence(STATS_FILE);
 
     // Add shutdown hooks for graceful persistence
