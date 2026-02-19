@@ -62,6 +62,9 @@ export const createServer = async (config: any): Promise<any> => {
   // Track SSE clients for config broadcasting
   const sseClients = new Set<any>();
   let configWatcher: any = null;
+  // Guard against self-triggered config watch events (internal writes from POST /api/config)
+  let isInternalConfigWrite = false;
+  let configWatchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Broadcast config change to all connected clients
   const broadcastConfigChange = (configData: any) => {
@@ -166,7 +169,12 @@ export const createServer = async (config: any): Promise<any> => {
       _lastModified: Date.now()
     };
 
+    // Mark as internal write to prevent config watcher from re-triggering
+    isInternalConfigWrite = true;
     await writeConfigFile(configWithTimestamp);
+    // Reset flag after fs.watch has had time to fire (500ms buffer)
+    setTimeout(() => { isInternalConfigWrite = false; }, 500);
+
     return { success: true, message: "Config saved successfully", lastModified: configWithTimestamp._lastModified };
   });
 
@@ -1431,28 +1439,39 @@ export const createServer = async (config: any): Promise<any> => {
     }
   });
 
-  // Watch config file for external changes
+  // Watch config file for external changes only (skip internal writes from POST /api/config)
   try {
     // Get ConfigService instance for hot-reload support
     const configService = (server as any).configService as ConfigService;
 
     configWatcher = watch(CONFIG_FILE, { persistent: true }, async (eventType) => {
       if (eventType === 'change') {
-        try {
-          // Trigger ConfigService reload with validation
-          const result = await configService.reloadWithValidation();
-
-          if (result.valid && result.config) {
-            // Reload successful, broadcast new config to SSE clients
-            broadcastConfigChange(result.config);
-            console.log('Config reloaded successfully');
-          } else {
-            // Reload failed, keep old config
-            console.error('Config reload failed:', result.error);
-          }
-        } catch (err) {
-          console.error('Error reloading config:', err);
+        // Skip if this change was triggered by our own POST /api/config write
+        if (isInternalConfigWrite) {
+          return;
         }
+
+        // Debounce: fs.watch may fire multiple times for a single write
+        if (configWatchDebounceTimer) {
+          clearTimeout(configWatchDebounceTimer);
+        }
+        configWatchDebounceTimer = setTimeout(async () => {
+          try {
+            // Trigger ConfigService reload with validation
+            const result = await configService.reloadWithValidation();
+
+            if (result.valid && result.config) {
+              // Reload successful, broadcast new config to SSE clients
+              broadcastConfigChange(result.config);
+              console.log('Config reloaded from external change');
+            } else {
+              // Reload failed, keep old config
+              console.error('Config reload failed:', result.error);
+            }
+          } catch (err) {
+            console.error('Error reloading config:', err);
+          }
+        }, 300);
       }
     });
   } catch (err) {

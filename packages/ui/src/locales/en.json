@@ -6,6 +6,7 @@
   "app": {
     "title": "Claude Code Router",
     "restart": "Restart",
+    "restarting": "Restarting...",
     "save": "Save",
     "cancel": "Cancel",
     "edit": "Edit",

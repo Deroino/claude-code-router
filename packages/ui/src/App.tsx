@@ -153,8 +153,8 @@ function App() {
     // Wait for pending auto-save to complete
     if (isSaving) {
       showToast(t('app.waiting_for_save'), 'warning');
-      // Wait up to 5 seconds for save to complete
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      // Wait up to 3 seconds for save to complete (debounce is 2s + 1s buffer)
+      await new Promise(resolve => setTimeout(resolve, 3000));
     }
 
     setIsRestarting(true);
@@ -184,6 +184,12 @@ function App() {
 
       statusEventSource.onerror = () => {
         statusEventSource.close();
+        // Server connection lost before service_stopping was received
+        // This means the server was killed - start polling for recovery as fallback
+        if (!serviceStopped) {
+          serviceStopped = true;
+          pollForServiceRecovery();
+        }
       };
 
       // Call restart API
@@ -200,7 +206,7 @@ function App() {
   // Poll for service recovery after restart
   const pollForServiceRecovery = () => {
     let attempts = 0;
-    const maxAttempts = 30; // 60 seconds max
+    const maxAttempts = 30; // 30 seconds max (1s interval)
 
     const checkService = setInterval(async () => {
       attempts++;
@@ -212,7 +218,7 @@ function App() {
           setIsRestarting(false);
           showToast(t('app.restart_success') || 'Service restarted successfully!', 'success');
           // Reload the page to refresh all data
-          setTimeout(() => window.location.reload(), 1500);
+          setTimeout(() => window.location.reload(), 500);
         }
       } catch (e) {
         // Service not ready yet
@@ -222,7 +228,7 @@ function App() {
           showToast(t('app.restart_timeout') || 'Restart timeout, please refresh manually', 'error');
         }
       }
-    }, 2000);
+    }, 1000);
   };
   
   // 检查更新函数

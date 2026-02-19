@@ -6,6 +6,7 @@
   "app": {
     "title": "Claude Code Router",
     "restart": "重启",
+    "restarting": "重启中...",
     "save": "保存",
     "cancel": "取消",
     "edit": "编辑",
