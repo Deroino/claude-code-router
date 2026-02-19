@@ -28,6 +28,20 @@ export class ProviderService {
     }
   }
 
+  /**
+   * Reload providers from current config.
+   * Clears existing providers/routes and re-initializes from ConfigService.
+   * apiKeyRotationIndex is intentionally preserved for rotation continuity.
+   * Safe in single-threaded JS: no request can interleave during synchronous execution.
+   */
+  public reload(): void {
+    this.providers.clear();
+    this.modelRoutes.clear();
+    // NOTE: apiKeyRotationIndex intentionally preserved
+    this.initializeCustomProviders();
+    this.logger.info(`Provider reload complete. ${this.providers.size} providers active.`);
+  }
+
   private initializeFromProvidersArray(providersConfig: ConfigProvider[]) {
     providersConfig.forEach((providerConfig: ConfigProvider) => {
       try {

@@ -18,6 +18,7 @@ import { checkForUpdates, performUpdate } from "./update";
 import { version } from "../../package.json";
 import { spawn } from "child_process";
 import {cleanupPidFile, isServiceRunning} from "./processCheck";
+import { requestStatsService } from "@musistudio/llms";
 
 // Function to interpolate environment variables in config values
 const interpolateEnvVars = (obj: any): any => {
@@ -204,6 +205,11 @@ export const run = async (args: string[] = []) => {
 
   app.post("/api/restart", async () => {
     setTimeout(async () => {
+      try {
+        requestStatsService.shutdown();
+      } catch (e) {
+        console.error('Failed to save stats before restart:', e);
+      }
       spawn("ccr", ["restart"], {
         detached: true,
         stdio: "ignore",

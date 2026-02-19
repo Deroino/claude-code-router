@@ -100,6 +100,27 @@ class Server {
       this.app.log.error(`Failed to initialize ProviderService: ${error}`);
       throw error;
     });
+
+    // Hot-reload coordination: wait for init, then listen for config changes
+    this.initializationPromise.then(() => {
+      let reloadTimer: NodeJS.Timeout | null = null;
+
+      this.configService.onConfigChange(async () => {
+        // Debounce: fs.watch may fire multiple times for one save
+        if (reloadTimer) clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(async () => {
+          try {
+            this.app.log.info('Config changed, reloading services...');
+            await this.transformerService.reloadCustomTransformers();
+            this.providerService.reload();
+            this.app.log.info('All services reloaded successfully');
+          } catch (error) {
+            this.app.log.error(`Service hot-reload error: ${error}`);
+          }
+        }, 300);
+      });
+    });
+
     // Initialize tokenizer service
     this.tokenizerService.initialize().catch((error) => {
       this.app.log.error(`Failed to initialize TokenizerService: ${error}`);

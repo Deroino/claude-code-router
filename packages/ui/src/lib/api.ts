@@ -97,8 +97,9 @@ class ApiClient {
         // For memory router, we need to use the router instance
         // We'll dispatch a custom event that the app can listen to
         window.dispatchEvent(new CustomEvent('unauthorized'));
-        // Return a promise that never resolves to prevent further execution
-        return new Promise(() => {}) as Promise<T>;
+        // Throw error instead of returning a never-resolving Promise
+        // A never-resolving Promise causes Promise.all to hang forever (e.g. batch test)
+        throw new Error('Unauthorized: API key is invalid or missing');
       }
 
       const text = await response.text();

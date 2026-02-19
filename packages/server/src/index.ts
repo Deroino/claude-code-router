@@ -449,6 +449,12 @@ async function run() {
   const server = await getServer();
   server.app.post("/api/restart", async () => {
     setTimeout(async () => {
+      try {
+        // Ensure stats are persisted before exit
+        requestStatsService.shutdown();
+      } catch (e) {
+        console.error('Failed to save stats before restart:', e);
+      }
       process.exit(0);
     }, 100);
 
@@ -467,6 +473,11 @@ async function run() {
     process.on('SIGTERM', shutdownHandler);
     process.on('SIGINT', shutdownHandler);
     process.on('beforeExit', shutdownHandler);
+    // Safety net: exit handler runs synchronous code only
+    // requestStatsService.saveToFile() uses writeFileSync, so this is safe
+    process.on('exit', () => {
+      try { requestStatsService.shutdown(); } catch (e) { /* ignore */ }
+    });
   } catch (error) {
     console.error('Failed to initialize request stats persistence:', error);
   }

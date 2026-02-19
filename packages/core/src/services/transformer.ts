@@ -18,6 +18,8 @@ interface TransformerConfig {
 export class TransformerService {
   private transformers: Map<string, Transformer | TransformerConstructor> =
     new Map();
+  // Track built-in transformer names to preserve them during hot-reload
+  private builtinTransformerNames: Set<string> = new Set();
 
   constructor(
     private readonly configService: ConfigService,
@@ -125,18 +127,34 @@ export class TransformerService {
     }
   }
 
+  /**
+   * Reload custom transformers from config and plugins directory.
+   * Built-in transformers are preserved.
+   */
+  async reloadCustomTransformers(): Promise<void> {
+    // Remove all non-built-in transformers
+    for (const name of Array.from(this.transformers.keys())) {
+      if (!this.builtinTransformerNames.has(name)) {
+        this.transformers.delete(name);
+      }
+    }
+    // Reload from config and plugins
+    await this.loadFromConfig();
+    await this.loadFromPluginsDirectory();
+    this.logger.info('Custom transformers reloaded');
+  }
+
   private async registerDefaultTransformersInternal(): Promise<void> {
     try {
       Object.values(Transformers).forEach(
         (TransformerStatic: any) => {
+          let name: string;
           if (
             "TransformerName" in TransformerStatic &&
             typeof TransformerStatic.TransformerName === "string"
           ) {
-            this.registerTransformer(
-              TransformerStatic.TransformerName,
-              TransformerStatic
-            );
+            name = TransformerStatic.TransformerName;
+            this.registerTransformer(name, TransformerStatic);
           } else {
             const transformerInstance = new TransformerStatic();
             // Set logger for transformer instance
@@ -146,11 +164,11 @@ export class TransformerService {
             ) {
               (transformerInstance as any).logger = this.logger;
             }
-            this.registerTransformer(
-              transformerInstance.name!,
-              transformerInstance
-            );
+            name = transformerInstance.name!;
+            this.registerTransformer(name, transformerInstance);
           }
+          // Mark as built-in to preserve during hot-reload
+          this.builtinTransformerNames.add(name);
         }
       );
     } catch (error) {

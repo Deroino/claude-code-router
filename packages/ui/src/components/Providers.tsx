@@ -38,11 +38,13 @@ interface ProviderType extends Provider {}
 
 export function Providers({
   showToast,
+  updateToast,
   removeToast,
   hoveredModel,
   onBadgeRef
 }: {
   showToast: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => string;
+  updateToast: (id: string, message: string) => void;
   removeToast: (id: string) => void;
   hoveredModel?: { provider: string | null; model: string | null } | null | undefined;
   onBadgeRef?: (provider: string, model: string, ref: HTMLDivElement | null) => void;
@@ -740,6 +742,7 @@ export function Providers({
     setIsBatchTesting(true);
     const totalTests = selectedTests.length;
     let completedCount = 0;
+    const CONCURRENCY_LIMIT = 5;
 
     // Show persistent progress toast
     const progressToastId = showToast(
@@ -754,8 +757,8 @@ export function Providers({
       testIndices.set(`${r.provider}-${r.model}`, idx);
     });
 
-    // Test selected models in parallel
-    const testPromises = selectedTests.map(async (testItem) => {
+    // Run a single test and update state
+    const runSingleTest = async (testItem: BatchTestResult): Promise<{ success: boolean }> => {
       const { provider, model } = testItem;
       const index = testIndices.get(`${provider}-${model}`);
 
@@ -773,6 +776,9 @@ export function Providers({
       try {
         const result = await api.testModel(provider, model, config?.TEST_PROMPT);
         completedCount++;
+
+        // Update progress toast
+        updateToast(progressToastId, `Batch testing... [${completedCount}/${totalTests}]`);
 
         // Update status to success or error
         setBatchTestResults(prev => {
@@ -792,6 +798,10 @@ export function Providers({
         return { success: result?.success ?? false };
       } catch (err) {
         completedCount++;
+
+        // Update progress toast
+        updateToast(progressToastId, `Batch testing... [${completedCount}/${totalTests}]`);
+
         const errorMsg = err instanceof Error ? err.message : "Unknown error";
         // Update status to error
         setBatchTestResults(prev => {
@@ -809,10 +819,26 @@ export function Providers({
         });
         return { success: false };
       }
-    });
+    };
 
-    // Wait for all tests to complete
-    const results = await Promise.all(testPromises);
+    // Execute tests with concurrency limit
+    const results: { success: boolean }[] = [];
+    const queue = [...selectedTests];
+
+    const runNext = async (): Promise<void> => {
+      while (queue.length > 0) {
+        const testItem = queue.shift()!;
+        const result = await runSingleTest(testItem);
+        results.push(result);
+      }
+    };
+
+    // Launch limited number of concurrent workers
+    const workers = Array.from(
+      { length: Math.min(CONCURRENCY_LIMIT, totalTests) },
+      () => runNext()
+    );
+    await Promise.all(workers);
 
     // Remove progress toast and show final result
     removeToast(progressToastId);

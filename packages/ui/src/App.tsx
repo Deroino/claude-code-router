@@ -55,6 +55,7 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isJsonEditorOpen, setIsJsonEditorOpen] = useState(false);
   const [isLogViewerOpen, setIsLogViewerOpen] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
 
   // Panel visibility states
   const [showProviders, setShowProviders] = useState(true);
@@ -129,6 +130,11 @@ function App() {
     return id;
   }, []);
 
+  // Update toast message in-place (for progress indicators)
+  const updateToast = useCallback((id: string, message: string) => {
+    setToasts(prev => prev.map(t => t.id === id ? { ...t, message } : t));
+  }, []);
+
   // Remove toast function
   const removeToast = useCallback((id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
@@ -141,12 +147,17 @@ function App() {
       return;
     }
 
+    // Prevent double-click
+    if (isRestarting) return;
+
     // Wait for pending auto-save to complete
     if (isSaving) {
       showToast(t('app.waiting_for_save'), 'warning');
       // Wait up to 5 seconds for save to complete
       await new Promise(resolve => setTimeout(resolve, 5000));
     }
+
+    setIsRestarting(true);
 
     try {
       // Connect to restart status SSE first
@@ -182,6 +193,7 @@ function App() {
     } catch (error) {
       console.error('Failed to restart service:', error);
       showToast(t('app.restart_failed') + ': ' + (error as Error).message, 'error');
+      setIsRestarting(false);
     }
   };
 
@@ -197,6 +209,7 @@ function App() {
         const response = await fetch('/api/config');
         if (response.ok) {
           clearInterval(checkService);
+          setIsRestarting(false);
           showToast(t('app.restart_success') || 'Service restarted successfully!', 'success');
           // Reload the page to refresh all data
           setTimeout(() => window.location.reload(), 1500);
@@ -205,6 +218,7 @@ function App() {
         // Service not ready yet
         if (attempts >= maxAttempts) {
           clearInterval(checkService);
+          setIsRestarting(false);
           showToast(t('app.restart_timeout') || 'Restart timeout, please refresh manually', 'error');
         }
       }
@@ -543,9 +557,9 @@ function App() {
               </TooltipContent>
             </Tooltip>
           )}
-          <Button onClick={restartService} className="transition-all-ease hover:scale-[1.02] active:scale-[0.98]">
-            <RefreshCw className={`mr-2 h-4 w-4 ${isSaving ? 'animate-spin' : ''}`} />
-            {t('app.restart')}
+          <Button onClick={restartService} disabled={isRestarting} className="transition-all-ease hover:scale-[1.02] active:scale-[0.98]">
+            <RefreshCw className={`mr-2 h-4 w-4 ${isRestarting ? 'animate-spin' : ''}`} />
+            {isRestarting ? (t('app.restarting') || 'Restarting...') : t('app.restart')}
           </Button>
         </div>
       </header>
@@ -556,6 +570,7 @@ function App() {
           <div className="flex-1 min-w-0 animate-slide-in">
             <Providers
               showToast={showToast}
+              updateToast={updateToast}
               removeToast={removeToast}
               hoveredModel={hoveredModel}
               onBadgeRef={handleBadgeRef}
