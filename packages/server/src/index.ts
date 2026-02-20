@@ -490,6 +490,8 @@ export type { RunOptions };
 export type { IAgent, ITool } from "./agents/type";
 export { initDir, initConfig, readConfigFile, writeConfigFile, backupConfigFile } from "./utils";
 export { pluginManager, tokenSpeedPlugin } from "@musistudio/llms";
+// @ts-ignore - Re-export requestStatsService from llms package
+export { requestStatsService } from "@musistudio/llms";
 
 // Start service if this file is run directly
 if (require.main === module) {

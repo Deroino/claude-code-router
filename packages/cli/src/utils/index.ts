@@ -12,13 +12,12 @@ import {
   REFERENCE_COUNT_FILE,
   readPresetFile,
 } from "@CCR/shared";
-import { getServer } from "@CCR/server";
+import { getServer, requestStatsService } from "@CCR/server";
 import { writeFileSync, existsSync, readFileSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { checkForUpdates, performUpdate } from "./update";
 import { version } from "../../package.json";
 import { spawn } from "child_process";
 import {cleanupPidFile, isServiceRunning} from "./processCheck";
-import { requestStatsService } from "@musistudio/llms";
 
 // Function to interpolate environment variables in config values
 const interpolateEnvVars = (obj: any): any => {

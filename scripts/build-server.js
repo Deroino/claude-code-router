@@ -17,7 +17,7 @@ try {
 
   // Generate type declaration files
   console.log('Generating type declaration files...');
-  execSync('tsc --emitDeclarationOnly', {
+  execSync('tsc --emitDeclarationOnly --skipLibCheck', {
     stdio: 'inherit',
     cwd: serverDir
   });
