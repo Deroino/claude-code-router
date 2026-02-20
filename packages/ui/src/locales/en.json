@@ -112,7 +112,8 @@
     "name_required": "Name is required",
     "name_duplicate": "A provider with this name already exists",
     "search": "Search providers...",
-    "add_api_key": "Add API Key"
+    "add_api_key": "Add API Key",
+    "test": "Test"
 
   },
   "router": {
@@ -420,7 +421,10 @@
     "failed_status": "Failed",
     "testing_status": "Testing...",
     "pending": "Pending",
-    "idle": "Idle"
+    "idle": "Idle",
+    "select_all": "Select all",
+    "no_models_to_test": "No models to test",
+    "batch_complete": "Batch test complete: {{success}} passed, {{fail}} failed ({{total}} total)"
   },
   "settings": {
     "no_auth": "No Auth (Disable Authentication)",

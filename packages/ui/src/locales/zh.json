@@ -112,7 +112,8 @@
     "name_required": "名称为必填项",
     "name_duplicate": "已存在同名供应商",
     "search": "搜索供应商...",
-    "add_api_key": "添加 API 密钥"
+    "add_api_key": "添加 API 密钥",
+    "test": "测试"
 
   },
   "router": {
@@ -419,7 +420,10 @@
     "failed_status": "失败",
     "testing_status": "测试中...",
     "pending": "待处理",
-    "idle": "空闲"
+    "idle": "空闲",
+    "select_all": "全选",
+    "no_models_to_test": "没有可测试的模型",
+    "batch_complete": "批量测试完成: {{success}} 通过, {{fail}} 失败 (共 {{total}} 个)"
   },
   "settings": {
     "no_auth": "无认证（禁用身份验证）",

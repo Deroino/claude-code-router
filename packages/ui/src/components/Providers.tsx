@@ -846,7 +846,7 @@ export function Providers({
     const failTotal = results.filter(r => !r.success).length;
 
     showToast(
-      `Batch test complete: ${successTotal} passed, ${failTotal} failed (${totalTests} total)`,
+      t("batch_test.batch_complete", { success: successTotal, fail: failTotal, total: totalTests }),
       failTotal > 0 ? 'warning' : 'success',
       8000
     );
@@ -866,33 +866,25 @@ export function Providers({
     }
 
     if (allTests.length === 0) {
-      showToast("No models to test", "warning");
+      showToast(t("batch_test.no_models_to_test"), "warning");
       return;
     }
 
-    // Merge with existing results to preserve history
-    const existingMap = new Map<string, BatchTestResult>();
-    batchTestResults.forEach(r => {
-      existingMap.set(`${r.provider}-${r.model}`, r);
-    });
+    // Clear previous results (frontend + backend)
+    const freshResults: BatchTestResult[] = allTests.map(({ provider, model }) => ({
+      provider,
+      model,
+      status: "idle" as const,
+    }));
 
-    const newResults: BatchTestResult[] = [];
+    setBatchTestResults(freshResults);
+    // Clear persisted results on server
+    try {
+      await api.saveBatchTestResults([]);
+    } catch {
+      // Ignore errors, continue with fresh state
+    }
 
-    // Add all current models, preserving existing results if available
-    allTests.forEach(({ provider, model }) => {
-      const key = `${provider}-${model}`;
-      if (existingMap.has(key)) {
-        newResults.push(existingMap.get(key)!);
-      } else {
-        newResults.push({
-          provider,
-          model,
-          status: "idle",
-        });
-      }
-    });
-
-    setBatchTestResults(newResults);
     setShowBatchTestDialog(true);
     // Don't auto-start, let user select and run
   };
@@ -940,12 +932,10 @@ export function Providers({
           <div className="flex gap-2">
             <Button
               variant="outline"
-              size="sm"
               onClick={handleBatchTestAll}
-              className="gap-1 hover:bg-amber-50 hover:text-amber-700 hover:border-amber-300"
             >
               <Play className="h-4 w-4" />
-              Test All
+              {t("providers.test")}
             </Button>
             <Button onClick={handleAddProvider}>{t("providers.add")}</Button>
           </div>

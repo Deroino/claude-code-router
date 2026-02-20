@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Check, X, Copy, Download, Filter, Search, XCircle, Play } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useTranslation } from "react-i18next";
 
 export interface BatchTestResult {
   provider: string;
@@ -34,10 +35,11 @@ export function BatchTestDialog({
   open,
   onClose,
   results,
-  title = "Batch Test Results",
+  title,
   onRunTests,
   isRunning = false
 }: BatchTestDialogProps) {
+  const { t } = useTranslation();
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "testing" | "idle">("all");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedTests, setSelectedTests] = useState<Set<string>>(new Set());
@@ -86,8 +88,7 @@ export function BatchTestDialog({
     const text = filteredResults.map(r => {
       const statusIcon = r.status === "success" ? "✓" : r.status === "error" ? "✗" : r.status === "testing" ? "⟳" : "?";
       const message = r.message ? ` - ${r.message}` : "";
-      const response = r.response ? `
-  Response: ${r.response}` : "";
+      const response = r.response ? `\n  Response: ${r.response}` : "";
       return `${statusIcon} ${r.provider}/${r.model}${message}${response}`;
     }).join("\n");
     navigator.clipboard.writeText(text);
@@ -149,10 +150,10 @@ export function BatchTestDialog({
       <DialogContent className="max-h-[80vh] flex flex-col sm:max-w-5xl">
         <DialogHeader>
           <DialogTitle className="flex items-center justify-between">
-            <span>{title}</span>
+            <span>{title || t("batch_test.title")}</span>
             {isRunning && (
               <span className="text-sm font-normal text-gray-500 animate-pulse">
-                Testing... ({testingCount} remaining)
+                {t("batch_test.testing")} {t("batch_test.remaining", { count: testingCount })}
               </span>
             )}
           </DialogTitle>
@@ -168,7 +169,7 @@ export function BatchTestDialog({
                 size="sm"
                 onClick={() => setStatusFilter("all")}
               >
-                All ({results.length})
+                {t("batch_test.all")} ({results.length})
               </Button>
               <Button
                 variant={statusFilter === "success" ? "default" : "outline"}
@@ -176,7 +177,7 @@ export function BatchTestDialog({
                 onClick={() => setStatusFilter("success")}
               >
                 <Check className="h-3 w-3 mr-1" />
-                Success ({successCount})
+                {t("batch_test.success")} ({successCount})
               </Button>
               <Button
                 variant={statusFilter === "error" ? "default" : "outline"}
@@ -184,7 +185,7 @@ export function BatchTestDialog({
                 onClick={() => setStatusFilter("error")}
               >
                 <X className="h-3 w-3 mr-1" />
-                Failed ({errorCount})
+                {t("batch_test.failed")} ({errorCount})
               </Button>
             </div>
           </div>
@@ -193,7 +194,7 @@ export function BatchTestDialog({
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
               <Input
-                placeholder="Search..."
+                placeholder={t("batch_test.search")}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-8 w-48"
@@ -215,7 +216,7 @@ export function BatchTestDialog({
               onClick={handleCopyResults}
             >
               <Copy className="h-4 w-4 mr-1" />
-              Copy
+              {t("batch_test.copy")}
             </Button>
             <Button
               variant="outline"
@@ -223,7 +224,7 @@ export function BatchTestDialog({
               onClick={handleDownloadResults}
             >
               <Download className="h-4 w-4 mr-1" />
-              Export
+              {t("batch_test.export")}
             </Button>
           </div>
         </div>
@@ -237,20 +238,20 @@ export function BatchTestDialog({
                   <Checkbox
                     checked={selectedTests.size > 0 && selectedTests.size === filteredResults.length}
                     onCheckedChange={toggleAllSelection}
-                    aria-label="Select all"
+                    aria-label={t("batch_test.select_all")}
                   />
                 </th>
-                <th className="text-left p-3 font-medium border-b whitespace-nowrap">Provider</th>
-                <th className="text-left p-3 font-medium border-b whitespace-nowrap">Model</th>
-                <th className="text-left p-3 font-medium border-b whitespace-nowrap">Status</th>
-                <th className="text-left p-3 font-medium border-b">Details</th>
+                <th className="text-left p-3 font-medium border-b whitespace-nowrap">{t("batch_test.provider")}</th>
+                <th className="text-left p-3 font-medium border-b whitespace-nowrap">{t("batch_test.model")}</th>
+                <th className="text-left p-3 font-medium border-b whitespace-nowrap">{t("batch_test.status")}</th>
+                <th className="text-left p-3 font-medium border-b">{t("batch_test.details")}</th>
               </tr>
             </thead>
             <tbody>
               {filteredResults.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="text-center p-8 text-gray-500">
-                    No results to display
+                    {t("batch_test.no_results")}
                   </td>
                 </tr>
               ) : (
@@ -272,28 +273,28 @@ export function BatchTestDialog({
                       {result.status === "success" && (
                         <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">
                           <Check className="h-3 w-3 mr-1" />
-                          Success
+                          {t("batch_test.success_status")}
                         </Badge>
                       )}
                       {result.status === "error" && (
                         <Badge className="bg-rose-100 text-rose-700 border-rose-200">
                           <X className="h-3 w-3 mr-1" />
-                          Failed
+                          {t("batch_test.failed_status")}
                         </Badge>
                       )}
                       {result.status === "testing" && (
                         <Badge className="bg-amber-100 text-amber-700 border-amber-200 animate-pulse">
-                          Testing...
+                          {t("batch_test.testing_status")}
                         </Badge>
                       )}
                       {result.status === "pending" && (
                         <Badge variant="outline">
-                          Pending
+                          {t("batch_test.pending")}
                         </Badge>
                       )}
                       {result.status === "idle" && (
                         <Badge variant="outline" className="text-gray-500 border-gray-200">
-                          Idle
+                          {t("batch_test.idle")}
                         </Badge>
                       )}
                     </td>
@@ -325,11 +326,11 @@ export function BatchTestDialog({
 
         <DialogFooter className="flex justify-between sm:justify-between items-center">
           <div className="text-sm text-gray-500">
-            {selectedTests.size} selected
+            {t("batch_test.selected", { count: selectedTests.size })}
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose}>
-              Close
+              {t("batch_test.close")}
             </Button>
             {onRunTests && (
               <Button
@@ -338,7 +339,7 @@ export function BatchTestDialog({
                 className="gap-2"
               >
                 <Play className="h-4 w-4" />
-                Run Selected Tests
+                {t("batch_test.run_selected")}
               </Button>
             )}
           </div>
