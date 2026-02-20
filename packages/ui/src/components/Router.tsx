@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { useConfig } from "./ConfigProvider";
 import { Combobox } from "./ui/combobox";
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
+import { generateModelOptions, generateGroupOptions, generateAllOptions } from "@/lib/modelOptions";
 
 interface RouterProps {
   hoveredModel?: { provider: string | null; model: string | null };
@@ -108,52 +109,10 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
   // Handle case where config.Providers might be null or undefined
   const providers = Array.isArray(config.Providers) ? config.Providers : [];
 
-  // Helper function to get stats for a model
-  const getModelStats = (providerName: string, modelName: string) => {
-    return requestStats?.find(s => s.provider === providerName && s.model === modelName);
-  };
-
-  // Helper function to determine model status color
-  const getModelStatus = (providerName: string, modelName: string): 'success' | 'error' | 'neutral' => {
-    const stats = getModelStats(providerName, modelName);
-    if (!stats?.lastRequest) return 'neutral';
-    return stats.lastRequest.error ? 'error' : 'success';
-  };
-
-  const modelOptions = providers.flatMap((provider) => {
-    // Handle case where individual provider might be null or undefined
-    if (!provider) return [];
-
-    // Handle case where provider.models might be null or undefined
-    const models = Array.isArray(provider.models) ? provider.models : [];
-
-    // Handle case where provider.name might be null or undefined
-    const providerName = provider.name || "Unknown Provider";
-
-    return models.map((model) => {
-      const stats = getModelStats(providerName, model || "Unknown Model");
-      const successCount = stats?.success || 0;
-      const status = getModelStatus(providerName, model || "Unknown Model");
-
-      return {
-        value: `${providerName},${model || "Unknown Model"}`,
-        label: `${providerName}, ${model || "Unknown Model"}`,
-        successCount,
-        status,
-      };
-    });
-  }).sort((a, b) => b.successCount - a.successCount); // Sort by success count descending
-
-  // Generate group options from ModelGroups config
-  const groups = Array.isArray(config.ModelGroups) ? config.ModelGroups : [];
-  const groupOptions = groups.map(group => ({
-    value: `group:${group.name}`,
-    label: `⊞ ${group.name} (${group.models?.length || 0})`,
-    status: 'neutral' as const,
-    successCount: 0,
-    isGroup: true,
-  }));
-  const allOptions = [...groupOptions, ...modelOptions];
+  // Generate options using shared utility functions
+  const modelOptions = generateModelOptions(providers, requestStats);
+  const groupOptions = generateGroupOptions(config.ModelGroups || []);
+  const allOptions = generateAllOptions(providers, config.ModelGroups || [], requestStats);
 
   // Construct the hovered value for highlighting
   const hoveredValue = hoveredModel?.provider && hoveredModel?.model

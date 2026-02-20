@@ -101,3 +101,20 @@ ccr statusline
 - Default fallback config (error path, ~line 130-155)
 
 **When adding a new config field to server**: Make sure `requestStatsService` and other singletons from `@musistudio/llms` use **static top-level imports** in `server.ts` and `index.ts`, not dynamic `await import()` inside route handlers, to avoid potential dual-singleton issues with esbuild bundling.
+
+## esbuild Dual-Singleton Trap (Critical Lesson)
+
+**Root cause**: CLI's esbuild bundles `@CCR/server`'s `dist/index.js` (which already bundles `@musistudio/llms` inside), then CLI also bundles `@musistudio/llms` directly from source. Result: **two separate `RequestStatsService` instances** in the final `dist/cli.js`.
+
+**Why `globalThis` guard fails**: esbuild's CJS module wrappers isolate `globalThis` property writes between separately-bundled copies of the same module. Two `globalThis[KEY] ?? (globalThis[KEY] = new X())` in the same bundle but from different bundled sources will each create their own instance.
+
+**Symptoms**: Data exists in memory (API returns stats), but `request-stats.json` stays `{}`. The instance with `initPersistence()` has no data; the instance with `recordSuccess()`/`recordFailure()` has no persistence timer.
+
+**Fix applied**: `ensurePersistence()` lazy-init in `recordSuccess()`/`recordFailure()` — each instance auto-initializes persistence on first data write using a well-known default path, regardless of whether `initPersistence()` was externally called.
+
+**Prevention rules for any singleton in this monorepo**:
+1. Never rely solely on external `init*()` calls — singletons must self-initialize on first use
+2. Never assume `globalThis` deduplication works across esbuild-bundled modules
+3. When `@CCR/server` `main` points to `dist/index.js`, CLI's esbuild re-bundles everything inside it — any singleton in that chain gets duplicated
+4. Changing `@CCR/server` `main` to `src/index.ts` breaks the CLI build (missing dependencies). Do NOT attempt this.
+5. The `@CCR/server` `package.json` `main` field MUST remain `dist/index.js`

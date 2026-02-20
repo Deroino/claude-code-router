@@ -6,7 +6,8 @@
 
 import { EventEmitter } from 'events';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
+import { dirname, join } from 'path';
+import { homedir } from 'os';
 
 export interface LastRequestInfo {
   timestamp: string;
@@ -31,6 +32,9 @@ export interface RequestStats {
   lastRequest?: LastSuccessInfo | LastFailureInfo;
 }
 
+// Well-known default stats file path
+const DEFAULT_STATS_FILE = join(homedir(), '.claude-code-router', 'request-stats.json');
+
 export class RequestStatsService extends EventEmitter {
   private stats: Map<string, RequestStats> = new Map();
   private persistTimer: NodeJS.Timeout | null = null;
@@ -50,7 +54,19 @@ export class RequestStatsService extends EventEmitter {
     return new Map(this.stats);
   }
 
+  /**
+   * Ensure persistence is initialized before recording data.
+   * Uses the well-known default path if initPersistence() was never called.
+   * This prevents data loss from esbuild dual-singleton issues where
+   * initPersistence() is called on one instance but data is recorded on another.
+   */
+  private ensurePersistence(): void {
+    if (this.persistTimer) return;
+    this.initPersistence(this.statsFilePath || DEFAULT_STATS_FILE);
+  }
+
   recordSuccess(provider: string, model: string, request: any, response: any): void {
+    this.ensurePersistence();
     const key = this.buildKey(provider, model);
     const existing = this.stats.get(key) || { success: 0, fail: 0 };
     const lastSuccessRequest: LastSuccessInfo = {
@@ -69,6 +85,7 @@ export class RequestStatsService extends EventEmitter {
   }
 
   recordFailure(provider: string, model: string, request: any, error: string, statusCode?: number): void {
+    this.ensurePersistence();
     const key = this.buildKey(provider, model);
     const existing = this.stats.get(key) || { success: 0, fail: 0 };
     const lastFailureRequest: LastFailureInfo = {
@@ -98,6 +115,8 @@ export class RequestStatsService extends EventEmitter {
    * Call this after construction with the STATS_FILE path
    */
   initPersistence(filePath: string): void {
+    // Prevent double initialization
+    if (this.persistTimer) return;
     this.statsFilePath = filePath;
     this.loadFromFile();
     // Sync to file every 30 seconds if dirty
@@ -175,4 +194,9 @@ export class RequestStatsService extends EventEmitter {
   }
 }
 
-export const requestStatsService = new RequestStatsService();
+// Use globalThis to prevent dual-singleton from esbuild bundling
+// When multiple bundles include this module, only the first instance is created
+const GLOBAL_KEY = '__CCR_REQUEST_STATS_SERVICE__' as const;
+export const requestStatsService: RequestStatsService =
+  (globalThis as any)[GLOBAL_KEY] ??
+  ((globalThis as any)[GLOBAL_KEY] = new RequestStatsService());

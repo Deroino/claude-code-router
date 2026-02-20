@@ -10,6 +10,7 @@ import { Plus, Pencil, Trash2, X, Layers, Check } from "lucide-react";
 import { useConfig } from "./ConfigProvider";
 import type { ModelGroup, Provider } from "@/types";
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
+import { generateModelOptions } from "@/lib/modelOptions";
 import {
   Dialog,
   DialogContent,
@@ -76,16 +77,8 @@ export function ModelGroups({ requestStats }: ModelGroupsProps) {
     return { ...totals, rate };
   };
 
-  // Generate model options from providers (same pattern as Router.tsx)
-  const modelOptions = providers.flatMap((provider) => {
-    if (!provider) return [];
-    const models = Array.isArray(provider.models) ? provider.models : [];
-    const providerName = provider.name || "Unknown Provider";
-    return models.map((model) => ({
-      value: `${providerName},${model || "Unknown Model"}`,
-      label: `${providerName}, ${model || "Unknown Model"}`,
-    }));
-  });
+  // Generate model options from providers using shared utility function
+  const modelOptions = generateModelOptions(providers, requestStats);
 
   // Check if a group name is used in Router config
   const getGroupUsageScenarios = (groupName: string): string[] => {

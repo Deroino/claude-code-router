@@ -12,7 +12,11 @@ import {
   REFERENCE_COUNT_FILE,
   readPresetFile,
 } from "@CCR/shared";
-import { getServer, requestStatsService } from "@CCR/server";
+import { getServer } from "@CCR/server";
+// Import requestStatsService directly from @musistudio/llms instead of re-export from @CCR/server
+// to prevent dual-singleton issues when esbuild bundles server's dist (which already includes its own copy)
+// @ts-ignore
+import { requestStatsService } from "@musistudio/llms";
 import { writeFileSync, existsSync, readFileSync, mkdirSync, readdirSync, unlinkSync } from "fs";
 import { checkForUpdates, performUpdate } from "./update";
 import { version } from "../../package.json";
