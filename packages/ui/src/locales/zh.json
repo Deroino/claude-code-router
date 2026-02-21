@@ -423,7 +423,16 @@
     "idle": "空闲",
     "select_all": "全选",
     "no_models_to_test": "没有可测试的模型",
-    "batch_complete": "批量测试完成: {{success}} 通过, {{fail}} 失败 (共 {{total}} 个)"
+    "batch_complete": "批量测试完成: {{success}} 通过, {{fail}} 失败 (共 {{total}} 个)",
+    "concurrency": "并发数",
+    "cancel": "取消测试",
+    "cancelled_status": "已取消",
+    "cancelled": "批量测试已取消: {{completed}} 个已完成, {{cancelled}} 个已取消",
+    "backend_running": "后台测试进行中...",
+    "started": "批量测试已启动: 共 {{total}} 个测试, 并发数 {{concurrency}}",
+    "start_failed": "启动批量测试失败",
+    "already_running": "已有批量测试正在运行，请先取消",
+    "cancel_failed": "取消批量测试失败"
   },
   "settings": {
     "no_auth": "无认证（禁用身份验证）",

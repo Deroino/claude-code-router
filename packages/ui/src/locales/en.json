@@ -424,7 +424,16 @@
     "idle": "Idle",
     "select_all": "Select all",
     "no_models_to_test": "No models to test",
-    "batch_complete": "Batch test complete: {{success}} passed, {{fail}} failed ({{total}} total)"
+    "batch_complete": "Batch test complete: {{success}} passed, {{fail}} failed ({{total}} total)",
+    "concurrency": "Concurrency",
+    "cancel": "Cancel Test",
+    "cancelled_status": "Cancelled",
+    "cancelled": "Batch test cancelled: {{completed}} completed, {{cancelled}} cancelled",
+    "backend_running": "Testing in background...",
+    "started": "Batch test started: {{total}} tests, concurrency {{concurrency}}",
+    "start_failed": "Failed to start batch test",
+    "already_running": "A batch test is already running. Cancel it first.",
+    "cancel_failed": "Failed to cancel batch test"
   },
   "settings": {
     "no_auth": "No Auth (Disable Authentication)",

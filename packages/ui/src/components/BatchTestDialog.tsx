@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Check, X, Copy, Download, Filter, Search, XCircle, Play } from "lucide-react";
+import { Check, X, Copy, Download, Filter, Search, XCircle, Play, Square } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useTranslation } from "react-i18next";
@@ -16,7 +16,7 @@ import { useTranslation } from "react-i18next";
 export interface BatchTestResult {
   provider: string;
   model: string;
-  status: "success" | "error" | "pending" | "testing" | "idle";
+  status: "success" | "error" | "pending" | "testing" | "idle" | "cancelled";
   message?: string;
   response?: string;
   timestamp?: number;
@@ -28,7 +28,10 @@ interface BatchTestDialogProps {
   results: BatchTestResult[];
   title?: string;
   onRunTests?: (selectedTests: BatchTestResult[]) => void;
+  onCancel?: () => void;
   isRunning?: boolean;
+  concurrency?: number;
+  onConcurrencyChange?: (value: number) => void;
 }
 
 export function BatchTestDialog({
@@ -37,7 +40,10 @@ export function BatchTestDialog({
   results,
   title,
   onRunTests,
-  isRunning = false
+  onCancel,
+  isRunning = false,
+  concurrency = 20,
+  onConcurrencyChange,
 }: BatchTestDialogProps) {
   const { t } = useTranslation();
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "testing" | "idle">("all");
@@ -83,10 +89,11 @@ export function BatchTestDialog({
   const successCount = results.filter(r => r.status === "success").length;
   const errorCount = results.filter(r => r.status === "error").length;
   const testingCount = results.filter(r => r.status === "testing" || r.status === "pending").length;
+  const completedCount = results.filter(r => r.status === "success" || r.status === "error" || r.status === "cancelled").length;
 
   const handleCopyResults = () => {
     const text = filteredResults.map(r => {
-      const statusIcon = r.status === "success" ? "✓" : r.status === "error" ? "✗" : r.status === "testing" ? "⟳" : "?";
+      const statusIcon = r.status === "success" ? "✓" : r.status === "error" ? "✗" : r.status === "testing" ? "⟳" : r.status === "cancelled" ? "⊘" : "?";
       const message = r.message ? ` - ${r.message}` : "";
       const response = r.response ? `\n  Response: ${r.response}` : "";
       return `${statusIcon} ${r.provider}/${r.model}${message}${response}`;
@@ -153,7 +160,7 @@ export function BatchTestDialog({
             <span>{title || t("batch_test.title")}</span>
             {isRunning && (
               <span className="text-sm font-normal text-gray-500 animate-pulse">
-                {t("batch_test.testing")} {t("batch_test.remaining", { count: testingCount })}
+                {t("batch_test.backend_running")} [{completedCount}/{results.length}]
               </span>
             )}
           </DialogTitle>
@@ -297,6 +304,11 @@ export function BatchTestDialog({
                           {t("batch_test.idle")}
                         </Badge>
                       )}
+                      {result.status === "cancelled" && (
+                        <Badge variant="outline" className="text-orange-500 border-orange-200">
+                          {t("batch_test.cancelled_status")}
+                        </Badge>
+                      )}
                     </td>
                     <td className="p-3 min-w-[300px]">
                       <div className="space-y-1">
@@ -325,17 +337,44 @@ export function BatchTestDialog({
         </div>
 
         <DialogFooter className="flex justify-between sm:justify-between items-center">
-          <div className="text-sm text-gray-500">
-            {t("batch_test.selected", { count: selectedTests.size })}
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-500">
+              {t("batch_test.selected", { count: selectedTests.size })}
+            </span>
+            {/* Concurrency input */}
+            {onConcurrencyChange && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm text-gray-500">{t("batch_test.concurrency")}:</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={concurrency}
+                  onChange={(e) => onConcurrencyChange(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
+                  className="w-16 h-8 text-sm"
+                  disabled={isRunning}
+                />
+              </div>
+            )}
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose}>
               {t("batch_test.close")}
             </Button>
-            {onRunTests && (
+            {isRunning && onCancel && (
+              <Button
+                variant="destructive"
+                onClick={onCancel}
+                className="gap-2"
+              >
+                <Square className="h-4 w-4" />
+                {t("batch_test.cancel")}
+              </Button>
+            )}
+            {!isRunning && onRunTests && (
               <Button
                 onClick={handleRunSelectedTests}
-                disabled={selectedTests.size === 0 || isRunning}
+                disabled={selectedTests.size === 0}
                 className="gap-2"
               >
                 <Play className="h-4 w-4" />

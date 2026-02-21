@@ -280,88 +280,57 @@ export const createServer = async (config: any): Promise<any> => {
     return '';
   }
 
-  // Add endpoint to test a specific provider+model
-  app.post("/api/model-test", async (req: any, reply: any) => {
-    // requestStatsService is imported at the top level
-
-    // Declare variables outside try block for catch block access
-    let provider: string;
-    let model: string;
+  /**
+   * Execute a single model test, reusable by both the API route and BatchTestService.
+   * Returns a result object without touching reply - caller handles HTTP response.
+   * Accepts an optional AbortSignal for external cancellation (e.g. batch test cancel).
+   */
+  async function executeModelTest(
+    provider: string,
+    model: string,
+    message?: string,
+    externalSignal?: AbortSignal
+  ): Promise<{ success: boolean; status?: number; response?: string; error?: string; rawResponse?: any; debug?: any }> {
     let providerData: any;
     let processedRequest: any;
     let requestConfig: any = {};
 
+    const serverInstance = (app as any)._server;
+    const providerService = serverInstance?.providerService;
+
+    if (!providerService) {
+      return { success: false, error: "Service is initializing, please try again later" };
+    }
+
+    providerData = providerService.getProvider(provider);
+    if (!providerData) {
+      return { success: false, error: `Provider '${provider}' not found` };
+    }
+
+    if (!providerData.models.includes(model)) {
+      return { success: false, error: `Model '${model}' not found in provider '${provider}'` };
+    }
+
     try {
-      ({ provider, model } = req.body);
-      const { message } = req.body;
-
-      if (!provider || !model) {
-        reply.status(400).send({ success: false, error: "provider and model are required" });
-        return;
-      }
-
-      const serverInstance = (app as any)._server;
-      const providerService = serverInstance?.providerService;
-
-      // Defensive check: ensure providerService is available
-      if (!providerService) {
-        reply.status(503).send({
-          success: false,
-          error: "Service is initializing, please try again later"
-        });
-        return;
-      }
-
-      const transformerService = serverInstance.transformerService;
-
-      // Get provider
-      providerData = providerService.getProvider(provider);
-      if (!providerData) {
-        reply.status(404).send({ success: false, error: `Provider '${provider}' not found` });
-        return;
-      }
-
-      // Check if model exists in provider
-      if (!providerData.models.includes(model)) {
-        reply.status(400).send({ success: false, error: `Model '${model}' not found in provider '${provider}'` });
-        return;
-      }
-
       // Construct test request
       const configService = serverInstance.configService;
       const testMessage = message || configService.get("TEST_PROMPT") || "Hello, please respond with 'OK' if you can understand this message.";
       const requestBody = {
         model: model,
-        messages: [
-          {
-            role: "user",
-            content: testMessage
-          }
-        ],
+        messages: [{ role: "user", content: testMessage }],
         max_tokens: 300,
         stream: false
       };
 
       // Apply provider transformers if configured
       processedRequest = requestBody;
-      requestConfig = {};  // Track config from transformers
+      requestConfig = {};
 
       if (providerData.transformer?.use) {
         for (const transformer of providerData.transformer.use) {
           if (transformer && typeof transformer.transformRequestIn === "function") {
-            // Pass provider and context parameters
-            const transformResult = await transformer.transformRequestIn(
-              processedRequest,
-              providerData,
-              { req }  // Context object
-            );
-
-            // Process result using helper function
-            const { body, config } = processTransformerResult(
-              transformResult,
-              processedRequest,
-              requestConfig
-            );
+            const transformResult = await transformer.transformRequestIn(processedRequest, providerData, {});
+            const { body, config } = processTransformerResult(transformResult, processedRequest, requestConfig);
             processedRequest = body;
             requestConfig = config;
           }
@@ -372,96 +341,61 @@ export const createServer = async (config: any): Promise<any> => {
       if (providerData.transformer?.[model]?.use) {
         for (const transformer of providerData.transformer[model].use) {
           if (transformer && typeof transformer.transformRequestIn === "function") {
-            // Pass provider and context parameters
-            const transformResult = await transformer.transformRequestIn(
-              processedRequest,
-              providerData,
-              { req }  // Context object
-            );
-
-            // Process result using helper function
-            const { body, config } = processTransformerResult(
-              transformResult,
-              processedRequest,
-              requestConfig
-            );
+            const transformResult = await transformer.transformRequestIn(processedRequest, providerData, {});
+            const { body, config } = processTransformerResult(transformResult, processedRequest, requestConfig);
             processedRequest = body;
             requestConfig = config;
           }
         }
       }
 
-      // Apply auth method from transformers if available
-      // Check provider-level transformers for auth method
+      // Apply auth method from transformers
       for (const transformer of providerData.transformer?.use || []) {
         if (transformer && typeof transformer.auth === "function") {
-          app.log.info({ transformer: transformer.name }, 'Calling auth method');
-          const authResult = await transformer.auth(processedRequest, providerData, { req });
-          app.log.info({ authResult }, 'Auth method result');
+          const authResult = await transformer.auth(processedRequest, providerData, {});
           if (authResult?.body) {
-            const { body, config } = processTransformerResult(
-              authResult,
-              processedRequest,
-              requestConfig
-            );
+            const { body, config } = processTransformerResult(authResult, processedRequest, requestConfig);
             processedRequest = body;
             if (config?.headers) {
-              requestConfig.headers = {
-                ...(requestConfig.headers || {}),
-                ...config.headers
-              };
+              requestConfig.headers = { ...(requestConfig.headers || {}), ...config.headers };
             }
           }
         }
       }
 
-      // Check model-specific transformers for auth method
       for (const transformer of providerData.transformer?.[model]?.use || []) {
         if (transformer && typeof transformer.auth === "function") {
-          const authResult = await transformer.auth(processedRequest, providerData, { req });
+          const authResult = await transformer.auth(processedRequest, providerData, {});
           if (authResult?.body) {
-            const { body, config } = processTransformerResult(
-              authResult,
-              processedRequest,
-              requestConfig
-            );
+            const { body, config } = processTransformerResult(authResult, processedRequest, requestConfig);
             processedRequest = body;
             if (config?.headers) {
-              requestConfig.headers = {
-                ...(requestConfig.headers || {}),
-                ...config.headers
-              };
+              requestConfig.headers = { ...(requestConfig.headers || {}), ...config.headers };
             }
           }
         }
       }
 
-      // Send request to provider
       // Build target URL with transformer endPoint support
       let targetUrl = requestConfig.url || providerData.baseUrl;
 
-      // If transformer has endPoint, append it to the baseUrl
       if (!requestConfig.url && providerData.transformer?.use) {
         for (const transformer of providerData.transformer.use) {
           if (transformer && transformer.endPoint) {
-            // Remove trailing slash from baseUrl and leading slash from endPoint
             const baseUrl = targetUrl.replace(/\/$/, '');
             const endPoint = transformer.endPoint.replace(/^\//, '');
             targetUrl = `${baseUrl}/${endPoint}`;
-            app.log.debug({ transformer: transformer.name, endPoint: transformer.endPoint }, 'Using transformer endPoint');
-            break; // Use first transformer with endPoint
+            break;
           }
         }
       }
 
-      // Also check model-specific transformers for endPoint
       if (!requestConfig.url && providerData.transformer?.[model]?.use) {
         for (const transformer of providerData.transformer[model].use) {
           if (transformer && transformer.endPoint) {
             const baseUrl = targetUrl.replace(/\/$/, '');
             const endPoint = transformer.endPoint.replace(/^\//, '');
             targetUrl = `${baseUrl}/${endPoint}`;
-            app.log.debug({ transformer: transformer.name, endPoint: transformer.endPoint }, 'Using model-specific transformer endPoint');
             break;
           }
         }
@@ -472,22 +406,21 @@ export const createServer = async (config: any): Promise<any> => {
         ? providerData.apiKey
         : providerService.getApiKey(providerData.name, providerData.apiKey);
 
-      // Build headers using transformer config
-      const requestHeaders = buildRequestHeaders(
-        selectedApiKey,
-        requestConfig.headers || {}
-      );
+      const requestHeaders = buildRequestHeaders(selectedApiKey, requestConfig.headers || {});
 
-      // Debug output
-      console.log('[MODEL-TEST DEBUG] Provider:', provider, 'Model:', model);
-      console.log('[MODEL-TEST DEBUG] Transformer headers:', JSON.stringify(requestConfig.headers));
-      console.log('[MODEL-TEST DEBUG] Final headers:', JSON.stringify(requestHeaders));
-      console.log('[MODEL-TEST DEBUG] Base URL:', providerData.baseUrl);
-      console.log('[MODEL-TEST DEBUG] Target URL:', targetUrl);
-
-      // Create AbortController for timeout
+      // Create AbortController for timeout, link with external signal
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000); // 10 seconds timeout
+      const timeout = setTimeout(() => controller.abort(), 10000);
+
+      // If external signal is already aborted, abort immediately
+      if (externalSignal?.aborted) {
+        clearTimeout(timeout);
+        return { success: false, status: 499, error: "Cancelled" };
+      }
+
+      // Listen for external abort
+      const onExternalAbort = () => controller.abort();
+      externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
 
       const fetchOptions: RequestInit = {
         method: "POST",
@@ -496,34 +429,25 @@ export const createServer = async (config: any): Promise<any> => {
         signal: controller.signal
       };
 
-      // Use proxy if configured
-      const httpsProxy = configService.getHttpsProxy();
+      const configService2 = serverInstance.configService;
+      const httpsProxy = configService2.getHttpsProxy();
       if (httpsProxy) {
         (fetchOptions as any).dispatcher = new ProxyAgent(httpsProxy);
       }
 
       const response = await fetch(targetUrl, fetchOptions);
-
       clearTimeout(timeout);
+      externalSignal?.removeEventListener('abort', onExternalAbort);
 
       if (response.ok) {
         const data = await response.json();
-
-        // Extract response text from model
         let responseText = extractResponseContent(data);
-
-        // Log the full response structure for debugging
-        app.log.debug({ responseData: data, extractedText: responseText }, 'Model test response structure');
-
-        // Check if response is empty after trimming
         const trimmedResponse = responseText.trim();
+
         if (!trimmedResponse) {
-          // Log unrecognized format
-          app.log.warn({ responseData: data }, 'Unrecognized response format in model test');
-          // Record failure for empty response with full response body for debugging
           const errorMessage = `Model returned empty response. Raw response: ${JSON.stringify(data)}`;
           requestStatsService.recordFailure(provider, model, processedRequest, errorMessage, 200);
-          reply.status(200).send({
+          return {
             success: false,
             error: "Model returned empty response",
             rawResponse: data,
@@ -532,106 +456,61 @@ export const createServer = async (config: any): Promise<any> => {
               responseStructure: Object.keys(data),
               extractedText: responseText
             }
-          });
-          return;
+          };
         }
 
-        // Record success statistics
         requestStatsService.recordSuccess(provider, model, processedRequest, data);
-        return {
-          success: true,
-          status: response.status,
-          response: responseText,
-          data: data
-        };
+        return { success: true, status: response.status, response: responseText };
       } else {
         const errorText = await response.text();
-        let errorData = errorText;
+        let errorData: any = errorText;
 
-        // Check if it's gzip compressed or garbled error
         if (isCompressedError(errorText)) {
-          // Log the original garbled error for debugging
-          app.log.warn({
-            originalError: errorText.substring(0, 200) + (errorText.length > 200 ? '...' : ''),
-            provider,
-            model,
-            status: response.status,
-            errorSize: errorText.length
-          }, 'Received compressed/garbled error from provider');
-
-          // Replace with readable error information
           errorData = replaceCompressedError(errorText, provider, model, response.status);
         } else {
-          // Try to parse error as JSON to remove escaped characters
-          try {
-            const parsed = JSON.parse(errorText);
-            errorData = parsed;
-          } catch (e) {
-            // If not valid JSON, keep as is
-          }
+          try { errorData = JSON.parse(errorText); } catch (e) { /* keep as is */ }
         }
 
-        // Record failure statistics with original error text (not the readable version)
         requestStatsService.recordFailure(provider, model, processedRequest, errorText, response.status);
-
-        // Always return 200 to avoid triggering frontend auth redirect
-        // Include the original provider status in the response
-        reply.status(200).send({
-          success: false,
-          status: response.status,
-          error: errorData
-        });
-        return;
+        return { success: false, status: response.status, error: errorData };
       }
     } catch (error: any) {
-      // Handle timeout error
       if (error.name === 'AbortError') {
-        const p = req.body.provider || 'unknown';
-        const m = req.body.model || 'unknown';
-        app.log.warn({ provider: p, model: m }, 'Model test request timeout');
-        requestStatsService.recordFailure(p, m, processedRequest || {}, "Request timeout (10 seconds)", 504);
-        // Always return 200 to avoid triggering frontend auth redirect
-        reply.status(200).send({
-          success: false,
-          status: 504,
-          error: "Request timeout (10 seconds)"
-        });
-        return;
+        // Distinguish between timeout and external cancellation
+        if (externalSignal?.aborted) {
+          return { success: false, status: 499, error: "Cancelled" };
+        }
+        requestStatsService.recordFailure(provider, model, processedRequest || {}, "Request timeout (10 seconds)", 504);
+        return { success: false, status: 504, error: "Request timeout (10 seconds)" };
       }
 
-      // Build detailed error message
-      const p = req.body.provider || 'unknown';
-      const m = req.body.model || 'unknown';
       const targetUrl = requestConfig?.url || providerData?.baseUrl || 'unknown';
-
       let errorDetail = `Failed to connect to provider API at ${targetUrl}`;
-      if (error.cause) {
-        errorDetail += `\nCause: ${error.cause}`;
-      }
-      if (error.code) {
-        errorDetail += `\nError code: ${error.code}`;
-      }
+      if (error.cause) errorDetail += `\nCause: ${error.cause}`;
+      if (error.code) errorDetail += `\nError code: ${error.code}`;
       errorDetail += `\nOriginal error: ${error.message || 'Unknown error'}`;
 
-      app.log.error({
-        provider: p,
-        model: m,
-        error: error.message,
-        stack: error.stack,
-        targetUrl
-      }, 'Model test request failed');
+      requestStatsService.recordFailure(provider, model, processedRequest || {}, errorDetail, 500);
+      return { success: false, status: 500, error: errorDetail };
+    }
+  }
 
-      // Record failure statistics for other errors
-      requestStatsService.recordFailure(p, m, processedRequest || {}, errorDetail, 500);
+  // Expose executeModelTest for BatchTestService
+  (app as any).executeModelTest = executeModelTest;
 
-      // Always return 200 to avoid triggering frontend auth redirect
-      reply.status(200).send({
-        success: false,
-        status: 500,
-        error: errorDetail
-      });
+  // Add endpoint to test a specific provider+model (delegates to executeModelTest)
+  app.post("/api/model-test", async (req: any, reply: any) => {
+    const { provider, model, message } = req.body;
+
+    if (!provider || !model) {
+      reply.status(400).send({ success: false, error: "provider and model are required" });
       return;
     }
+
+    const result = await executeModelTest(provider, model, message);
+
+    // Always return 200 to avoid triggering frontend auth redirect
+    reply.status(200).send(result);
   });
 
   // Register static file serving with caching
@@ -1406,6 +1285,59 @@ export const createServer = async (config: any): Promise<any> => {
       console.error("Failed to clear request stats:", error);
       reply.status(500).send({ error: "Failed to clear request stats" });
     }
+  });
+
+  // ========== Backend Batch Test API ==========
+  const { batchTestService } = await import("./batch-test-service");
+
+  // Mount references for batch test service to use
+  app._server = server;
+  app.executeModelTest = executeModelTest;
+
+  // Start a batch test task
+  app.post("/api/batch-test/start", async (req: any, reply: any) => {
+    const { tests, concurrency = 20 } = req.body;
+
+    if (!tests || !Array.isArray(tests) || tests.length === 0) {
+      reply.status(400).send({ success: false, error: "tests array is required and must not be empty" });
+      return;
+    }
+
+    const clampedConcurrency = Math.max(1, Math.min(50, Number(concurrency) || 20));
+
+    // Get TEST_PROMPT from config
+    const serverInstance = (app as any)._server;
+    const configService = serverInstance?.configService;
+    const testMessage = configService?.get("TEST_PROMPT") || undefined;
+
+    const started = batchTestService.start(
+      tests,
+      clampedConcurrency,
+      (app as any).executeModelTest,
+      testMessage
+    );
+
+    if (!started) {
+      reply.status(409).send({ success: false, error: "A batch test is already running. Cancel it first." });
+      return;
+    }
+
+    return { success: true, total: tests.length, concurrency: clampedConcurrency };
+  });
+
+  // Get batch test task status
+  app.get("/api/batch-test/status", async (req: any, reply: any) => {
+    return batchTestService.getStatus();
+  });
+
+  // Cancel the running batch test task
+  app.post("/api/batch-test/cancel", async (req: any, reply: any) => {
+    const result = batchTestService.cancel();
+    if (!result.success) {
+      reply.status(400).send({ success: false, error: "No batch test is currently running" });
+      return;
+    }
+    return result;
   });
 
   // Batch test results persistence - GET

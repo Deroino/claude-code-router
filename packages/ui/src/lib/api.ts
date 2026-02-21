@@ -386,6 +386,39 @@ class ApiClient {
   async saveBatchTestResults(results: any[]): Promise<{ success: boolean }> {
     return this.put<{ success: boolean }>('/batch-test-results', { results });
   }
+
+  // ========== Backend Batch Test API ==========
+
+  // Start a batch test task on the backend
+  async startBatchTest(
+    tests: Array<{ provider: string; model: string }>,
+    concurrency: number = 20
+  ): Promise<{ success: boolean; total?: number; concurrency?: number; error?: string }> {
+    return this.post<{ success: boolean; total?: number; concurrency?: number; error?: string }>(
+      '/batch-test/start',
+      { tests, concurrency }
+    );
+  }
+
+  // Get batch test task status from the backend
+  async getBatchTestStatus(): Promise<{
+    status: 'idle' | 'running' | 'cancelling' | 'completed';
+    progress: { completed: number; total: number };
+    concurrency: number;
+    startedAt: number | null;
+    completedAt: number | null;
+    results: any[];
+  }> {
+    return this.get('/batch-test/status');
+  }
+
+  // Cancel the running batch test task
+  async cancelBatchTest(): Promise<{ success: boolean; completed?: number; cancelled?: number; error?: string }> {
+    return this.post<{ success: boolean; completed?: number; cancelled?: number; error?: string }>(
+      '/batch-test/cancel',
+      {}
+    );
+  }
 }
 
 // Create a default instance of the API client

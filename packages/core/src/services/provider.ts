@@ -21,7 +21,7 @@ export class ProviderService {
 
   private initializeCustomProviders() {
     const providersConfig =
-      this.configService.get<ConfigProvider[]>("providers");
+      this.configService.get<ConfigProvider[]>("providers") || this.configService.get<ConfigProvider[]>("Providers");
     if (providersConfig && Array.isArray(providersConfig)) {
       this.initializeFromProvidersArray(providersConfig);
       return;

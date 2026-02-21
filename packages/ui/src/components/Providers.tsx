@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -78,33 +78,68 @@ export function Providers({
   const [showBatchTestDialog, setShowBatchTestDialog] = useState<boolean>(false);
   const [batchTestResults, setBatchTestResults] = useState<BatchTestResult[]>([]);
   const [isBatchTesting, setIsBatchTesting] = useState<boolean>(false);
+  const [batchTestConcurrency, setBatchTestConcurrency] = useState<number>(20);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load results from server on mount
-  useEffect(() => {
-    api.getBatchTestResults().then(data => {
-      if (data?.results?.length > 0) {
-        setBatchTestResults(data.results);
+  // Poll backend batch test status
+  const pollBatchTestStatus = useCallback(async () => {
+    try {
+      const status = await api.getBatchTestStatus();
+      if (status.results?.length > 0) {
+        setBatchTestResults(status.results);
       }
-    }).catch(e => {
-      console.error('Failed to load batch test results from server:', e);
-      // Fallback to localStorage
-      try {
-        const savedResults = localStorage.getItem('batchTestResults');
-        if (savedResults) {
-          setBatchTestResults(JSON.parse(savedResults));
+      if (status.status === 'running' || status.status === 'cancelling') {
+        setIsBatchTesting(true);
+      } else {
+        setIsBatchTesting(false);
+        // Stop polling when task is no longer running
+        if (pollTimerRef.current) {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
         }
-      } catch {}
-    });
+      }
+    } catch (e) {
+      console.error('Failed to poll batch test status:', e);
+    }
   }, []);
 
-  // Save results to server whenever they change (overwrite previous)
+  // Start polling interval
+  const startPolling = useCallback(() => {
+    if (pollTimerRef.current) return; // Already polling
+    pollTimerRef.current = setInterval(pollBatchTestStatus, 2000);
+  }, [pollBatchTestStatus]);
+
+  // On mount: check if a batch test is running, load results
   useEffect(() => {
-    if (batchTestResults.length > 0) {
-      api.saveBatchTestResults(batchTestResults).catch(e => {
-        console.error('Failed to save batch test results to server:', e);
-      });
-    }
-  }, [batchTestResults]);
+    api.getBatchTestStatus().then(status => {
+      if (status.results?.length > 0) {
+        setBatchTestResults(status.results);
+      }
+      if (status.concurrency) {
+        setBatchTestConcurrency(status.concurrency);
+      }
+      if (status.status === 'running' || status.status === 'cancelling') {
+        setIsBatchTesting(true);
+        setShowBatchTestDialog(true);
+        startPolling();
+      }
+    }).catch(e => {
+      console.error('Failed to load batch test status:', e);
+      // Fallback: try legacy endpoint
+      api.getBatchTestResults().then(data => {
+        if (data?.results?.length > 0) {
+          setBatchTestResults(data.results);
+        }
+      }).catch(() => {});
+    });
+
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [startPolling]);
 
   // Get request statistics
   const { stats: requestStats } = useRequestStats();
@@ -739,119 +774,48 @@ export function Providers({
   const handleRunBatchTests = async (selectedTests: BatchTestResult[]) => {
     if (selectedTests.length === 0) return;
 
-    setIsBatchTesting(true);
-    const totalTests = selectedTests.length;
-    let completedCount = 0;
-    const CONCURRENCY_LIMIT = 5;
+    const tests = selectedTests.map(t => ({ provider: t.provider, model: t.model }));
 
-    // Show persistent progress toast
-    const progressToastId = showToast(
-      `Batch testing... [0/${totalTests}]`,
-      'warning',
-      0 // persistent, won't auto-dismiss
-    );
-
-    // Create a map for quick lookup of index in main array
-    const testIndices = new Map<string, number>();
-    batchTestResults.forEach((r, idx) => {
-      testIndices.set(`${r.provider}-${r.model}`, idx);
-    });
-
-    // Run a single test and update state
-    const runSingleTest = async (testItem: BatchTestResult): Promise<{ success: boolean }> => {
-      const { provider, model } = testItem;
-      const index = testIndices.get(`${provider}-${model}`);
-
-      if (index === undefined) return { success: false };
-
-      // Update status to testing
-      setBatchTestResults(prev => {
-        const updated = [...prev];
-        if (updated[index]) {
-          updated[index] = { ...updated[index], status: "testing", timestamp: Date.now() };
-        }
-        return updated;
-      });
-
-      try {
-        const result = await api.testModel(provider, model, config?.TEST_PROMPT);
-        completedCount++;
-
-        // Update progress toast
-        updateToast(progressToastId, `Batch testing... [${completedCount}/${totalTests}]`);
-
-        // Update status to success or error
-        setBatchTestResults(prev => {
-          const updated = [...prev];
-          if (updated[index]) {
-            updated[index] = {
-              provider,
-              model,
-              status: result?.success ? "success" : "error",
-              message: result?.error || undefined,
-              response: result?.response || undefined,
-              timestamp: Date.now(),
-            };
-          }
-          return updated;
-        });
-        return { success: result?.success ?? false };
-      } catch (err) {
-        completedCount++;
-
-        // Update progress toast
-        updateToast(progressToastId, `Batch testing... [${completedCount}/${totalTests}]`);
-
-        const errorMsg = err instanceof Error ? err.message : "Unknown error";
-        // Update status to error
-        setBatchTestResults(prev => {
-          const updated = [...prev];
-          if (updated[index]) {
-            updated[index] = {
-              provider,
-              model,
-              status: "error",
-              message: errorMsg,
-              timestamp: Date.now(),
-            };
-          }
-          return updated;
-        });
-        return { success: false };
+    try {
+      const result = await api.startBatchTest(tests, batchTestConcurrency);
+      if (result.success) {
+        setIsBatchTesting(true);
+        showToast(
+          t("batch_test.started", { total: result.total, concurrency: result.concurrency }),
+          'success',
+          3000
+        );
+        // Immediately poll once to get initial state
+        await pollBatchTestStatus();
+        startPolling();
+      } else {
+        showToast(result.error || t("batch_test.start_failed"), 'error', 5000);
       }
-    };
-
-    // Execute tests with concurrency limit
-    const results: { success: boolean }[] = [];
-    const queue = [...selectedTests];
-
-    const runNext = async (): Promise<void> => {
-      while (queue.length > 0) {
-        const testItem = queue.shift()!;
-        const result = await runSingleTest(testItem);
-        results.push(result);
+    } catch (err: any) {
+      // Handle 409 Conflict (task already running)
+      if (err.status === 409) {
+        showToast(t("batch_test.already_running"), 'warning', 5000);
+      } else {
+        showToast(err.message || t("batch_test.start_failed"), 'error', 5000);
       }
-    };
+    }
+  };
 
-    // Launch limited number of concurrent workers
-    const workers = Array.from(
-      { length: Math.min(CONCURRENCY_LIMIT, totalTests) },
-      () => runNext()
-    );
-    await Promise.all(workers);
-
-    // Remove progress toast and show final result
-    removeToast(progressToastId);
-    const successTotal = results.filter(r => r.success).length;
-    const failTotal = results.filter(r => !r.success).length;
-
-    showToast(
-      t("batch_test.batch_complete", { success: successTotal, fail: failTotal, total: totalTests }),
-      failTotal > 0 ? 'warning' : 'success',
-      8000
-    );
-
-    setIsBatchTesting(false);
+  const handleCancelBatchTest = async () => {
+    try {
+      const result = await api.cancelBatchTest();
+      if (result.success) {
+        showToast(
+          t("batch_test.cancelled", { completed: result.completed, cancelled: result.cancelled }),
+          'warning',
+          5000
+        );
+        // Poll one more time to get final state
+        await pollBatchTestStatus();
+      }
+    } catch (err: any) {
+      showToast(err.message || t("batch_test.cancel_failed"), 'error', 5000);
+    }
   };
 
   const handleBatchTestAll = async () => {
@@ -870,7 +834,7 @@ export function Providers({
       return;
     }
 
-    // Clear previous results (frontend + backend)
+    // Create initial idle results for display
     const freshResults: BatchTestResult[] = allTests.map(({ provider, model }) => ({
       provider,
       model,
@@ -878,13 +842,6 @@ export function Providers({
     }));
 
     setBatchTestResults(freshResults);
-    // Clear persisted results on server
-    try {
-      await api.saveBatchTestResults([]);
-    } catch {
-      // Ignore errors, continue with fresh state
-    }
-
     setShowBatchTestDialog(true);
     // Don't auto-start, let user select and run
   };
@@ -1619,9 +1576,12 @@ export function Providers({
         open={showBatchTestDialog}
         onClose={() => setShowBatchTestDialog(false)}
         results={batchTestResults}
-        title="Batch Test Results"
+        title={t("batch_test.title")}
         onRunTests={handleRunBatchTests}
+        onCancel={handleCancelBatchTest}
         isRunning={isBatchTesting}
+        concurrency={batchTestConcurrency}
+        onConcurrencyChange={setBatchTestConcurrency}
       />
     </Card>
   );
