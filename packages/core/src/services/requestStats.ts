@@ -46,11 +46,13 @@ export class RequestStatsService extends EventEmitter {
   }
 
   getStats(provider: string, model: string): RequestStats | undefined {
+    this.ensurePersistence();
     const key = this.buildKey(provider, model);
     return this.stats.get(key);
   }
 
   getAllStats(): Map<string, RequestStats> {
+    this.ensurePersistence();
     return new Map(this.stats);
   }
 

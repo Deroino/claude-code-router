@@ -391,7 +391,11 @@
     "timestamp": "时间戳",
     "status_code": "状态码",
     "test_availability": "测试可用性",
-    "no_providers": "未配置供应商"
+    "no_providers": "未配置供应商",
+    "connectivity_test": "测试 URL 连通性",
+    "connectivity_testing": "正在测试 {{url}} 的连通性...",
+    "connectivity_ok": "{{url}} 可达 ({{ms}}ms, HTTP {{status}})",
+    "connectivity_fail": "{{url}} 不可达: {{error}}"
   },
   "model_monitor": {
     "title": "模型监控",

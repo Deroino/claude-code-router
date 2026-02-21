@@ -594,7 +594,7 @@ function App() {
             )}
             {showModelGroups && (
               <div className="flex-1 min-h-0">
-                <ModelGroups requestStats={requestStats} />
+                <ModelGroups requestStats={requestStats} hoveredModel={hoveredModel} onHoverModel={handleHoverModel} />
               </div>
             )}
             {showTransformers && (

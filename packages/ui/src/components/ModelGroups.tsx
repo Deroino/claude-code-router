@@ -22,11 +22,13 @@ import {
 
 interface ModelGroupsProps {
   requestStats?: RequestStatsItem[];
+  hoveredModel?: { provider: string | null; model: string | null } | null;
+  onHoverModel?: (provider: string | null, model: string | null) => void;
 }
 
 const GROUP_NAME_REGEX = /^[a-zA-Z0-9_-]+$/;
 
-export function ModelGroups({ requestStats }: ModelGroupsProps) {
+export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelGroupsProps) {
   const { t } = useTranslation();
   const { config, setConfig } = useConfig();
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -178,6 +180,26 @@ export function ModelGroups({ requestStats }: ModelGroupsProps) {
     });
   };
 
+  // Handle hover on combobox dropdown item
+  const handleComboboxItemHover = (modelValue: string | null) => {
+    if (!onHoverModel) return;
+
+    if (modelValue && modelValue.includes(',')) {
+      const [provider, ...modelParts] = modelValue.split(',');
+      const model = modelParts.join(',');
+      if (provider && model) {
+        onHoverModel(provider, model);
+        return;
+      }
+    }
+    onHoverModel(null, null);
+  };
+
+  // Construct the hovered value for highlighting
+  const hoveredValue = hoveredModel?.provider && hoveredModel?.model
+    ? `${hoveredModel.provider},${hoveredModel.model}`
+    : undefined;
+
   return (
     <Card className="flex h-full flex-col rounded-lg border shadow-sm">
       <CardHeader className="flex flex-row items-center justify-between border-b p-4">
@@ -322,6 +344,8 @@ export function ModelGroups({ requestStats }: ModelGroupsProps) {
                   placeholder={t("groups.select_model")}
                   searchPlaceholder={t("groups.search_model")}
                   emptyPlaceholder={t("router.noModelFound")}
+                  hoveredValue={hoveredValue}
+                  onItemHover={handleComboboxItemHover}
                 />
               </div>
 

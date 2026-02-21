@@ -392,7 +392,11 @@
     "timestamp": "Timestamp",
     "status_code": "Status Code",
     "test_availability": "Test availability",
-    "no_providers": "No providers configured"
+    "no_providers": "No providers configured",
+    "connectivity_test": "Test URL connectivity",
+    "connectivity_testing": "Testing connectivity to {{url}}...",
+    "connectivity_ok": "{{url}} reachable ({{ms}}ms, HTTP {{status}})",
+    "connectivity_fail": "{{url}} unreachable: {{error}}"
   },
   "model_monitor": {
     "title": "Model Monitor",

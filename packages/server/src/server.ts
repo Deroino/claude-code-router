@@ -176,6 +176,21 @@ export const createServer = async (config: any): Promise<any> => {
     // Reset flag after fs.watch has had time to fire (500ms buffer)
     setTimeout(() => { isInternalConfigWrite = false; }, 500);
 
+    // Actively trigger hot-reload after writing config
+    // (fs.watch is intentionally skipped for internal writes to prevent loops,
+    //  so we must reload services directly here)
+    try {
+      const configService = (app as any)._server?.configService as ConfigService;
+      if (configService) {
+        const result = await configService.reloadWithValidation();
+        if (result.valid && result.config) {
+          broadcastConfigChange(result.config);
+        }
+      }
+    } catch (err) {
+      console.error('Error during post-save hot-reload:', err);
+    }
+
     return { success: true, message: "Config saved successfully", lastModified: configWithTimestamp._lastModified };
   });
 
@@ -253,8 +268,17 @@ export const createServer = async (config: any): Promise<any> => {
    */
   function extractResponseContent(data: any): string {
     // OpenAI format: choices[0].message.content
-    if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
-      return data.choices[0].message.content;
+    // Use typeof check to handle empty string correctly (empty string is falsy)
+    const message = data.choices?.[0]?.message;
+    if (message) {
+      if (typeof message.content === 'string' && message.content) {
+        return message.content;
+      }
+      // Fallback: reasoning_content for reasoning models (e.g. GLM, DeepSeek)
+      // When content is empty due to token exhaustion, reasoning_content may still have useful output
+      if (typeof message.reasoning_content === 'string' && message.reasoning_content) {
+        return message.reasoning_content;
+      }
     }
 
     // Anthropic format: content[0].text
@@ -411,7 +435,7 @@ export const createServer = async (config: any): Promise<any> => {
 
       // Create AbortController for timeout, link with external signal
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
+      const timeout = setTimeout(() => controller.abort(), 20000);
 
       // If external signal is already aborted, abort immediately
       if (externalSignal?.aborted) {
@@ -481,8 +505,8 @@ export const createServer = async (config: any): Promise<any> => {
         if (externalSignal?.aborted) {
           return { success: false, status: 499, error: "Cancelled" };
         }
-        requestStatsService.recordFailure(provider, model, processedRequest || {}, "Request timeout (10 seconds)", 504);
-        return { success: false, status: 504, error: "Request timeout (10 seconds)" };
+        requestStatsService.recordFailure(provider, model, processedRequest || {}, "Request timeout (20 seconds)", 504);
+        return { success: false, status: 504, error: "Request timeout (20 seconds)" };
       }
 
       const targetUrl = requestConfig?.url || providerData?.baseUrl || 'unknown';
@@ -512,6 +536,81 @@ export const createServer = async (config: any): Promise<any> => {
 
     // Always return 200 to avoid triggering frontend auth redirect
     reply.status(200).send(result);
+  });
+
+  // Add endpoint to test provider URL connectivity (HEAD request with fallback to GET)
+  app.post("/api/connectivity-test", async (req: any, reply: any) => {
+    const { url } = req.body as { url?: string };
+
+    if (!url) {
+      reply.status(400).send({ success: false, error: "url is required" });
+      return;
+    }
+
+    // Extract base domain URL (protocol + hostname + port)
+    let baseUrl: string;
+    try {
+      const urlObj = new URL(url);
+      baseUrl = `${urlObj.protocol}//${urlObj.hostname}${urlObj.port ? ':' + urlObj.port : ''}`;
+    } catch {
+      reply.status(400).send({ success: false, error: "Invalid URL format" });
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const startTime = Date.now();
+
+    try {
+      const fetchOptions: RequestInit = {
+        method: "HEAD",
+        signal: controller.signal,
+      };
+
+      // Use proxy if configured
+      const serverInst = (app as any)._server;
+      const configService2 = serverInst?.configService;
+      const httpsProxy = configService2?.getHttpsProxy();
+      if (httpsProxy) {
+        (fetchOptions as any).dispatcher = new ProxyAgent(httpsProxy);
+      }
+
+      let response: Response;
+      try {
+        response = await fetch(baseUrl, fetchOptions);
+      } catch {
+        // HEAD might be rejected, fallback to GET
+        fetchOptions.method = "GET";
+        response = await fetch(baseUrl, fetchOptions);
+      }
+
+      clearTimeout(timeout);
+      const latency = Date.now() - startTime;
+
+      reply.status(200).send({
+        success: true,
+        latency_ms: latency,
+        status: response.status,
+      });
+    } catch (error: any) {
+      clearTimeout(timeout);
+      const latency = Date.now() - startTime;
+
+      if (error.name === "AbortError") {
+        reply.status(200).send({
+          success: false,
+          latency_ms: latency,
+          error: "Connection timeout (10 seconds)",
+        });
+        return;
+      }
+
+      reply.status(200).send({
+        success: false,
+        latency_ms: latency,
+        error: error.message || "Connection failed",
+      });
+    }
   });
 
   // Register static file serving with caching

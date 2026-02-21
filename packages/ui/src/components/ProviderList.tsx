@@ -5,7 +5,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { api } from "@/lib/api";
 import type { Provider } from "@/types";
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 
 interface ProviderListProps {
   providers: Provider[];
@@ -297,6 +298,70 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
   );
 }
 
+interface ConnectivityTestButtonProps {
+  apiBaseUrl: string;
+  showToast: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => string;
+  removeToast: (id: string) => void;
+}
+
+function ConnectivityTestButton({ apiBaseUrl, showToast, removeToast }: ConnectivityTestButtonProps) {
+  const { t } = useTranslation();
+  const [isTesting, setIsTesting] = useState(false);
+
+  const handleTest = useCallback(async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (isTesting) return;
+
+    setIsTesting(true);
+    const toastId = showToast(t("provider_list.connectivity_testing", { url: apiBaseUrl }), 'warning', 0);
+
+    try {
+      const result = await api.testConnectivity(apiBaseUrl);
+      removeToast(toastId);
+
+      if (result?.success) {
+        showToast(
+          t("provider_list.connectivity_ok", { url: apiBaseUrl, ms: result.latency_ms, status: result.status }),
+          'success',
+          5000
+        );
+      } else {
+        showToast(
+          t("provider_list.connectivity_fail", { url: apiBaseUrl, error: result?.error || 'Unknown error' }),
+          'error',
+          8000
+        );
+      }
+    } catch (err: any) {
+      removeToast(toastId);
+      showToast(
+        t("provider_list.connectivity_fail", { url: apiBaseUrl, error: err?.message || 'Network error' }),
+        'error',
+        5000
+      );
+    } finally {
+      setIsTesting(false);
+    }
+  }, [apiBaseUrl, isTesting, showToast, removeToast, t]);
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={`inline-flex items-center p-0.5 rounded hover:bg-gray-100 transition-colors cursor-pointer ${isTesting ? 'animate-pulse' : ''}`}
+          onClick={handleTest}
+        >
+          <Zap className={`h-3 w-3 ${isTesting ? 'text-gray-400' : 'text-amber-500 fill-amber-500'}`} />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="text-xs">
+        {t("provider_list.connectivity_test")}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function ProviderList({ providers, onEdit, onRemove, showToast, removeToast, requestStats, hoveredModel, onBadgeRef, searchTerm = "" }: ProviderListProps) {
   // Wrap the entire provider list with a single TooltipProvider to avoid multiple providers
   if (!providers || !Array.isArray(providers)) {
@@ -364,7 +429,14 @@ export function ProviderList({ providers, onEdit, onRemove, showToast, removeToa
                     >
                       {providerName}
                     </a>
-                    <p className="text-xs text-gray-400 font-mono">{apiBaseUrl}</p>
+                    <p className="text-xs text-gray-400 font-mono flex items-center gap-1">
+                      {apiBaseUrl}
+                      <ConnectivityTestButton
+                        apiBaseUrl={apiBaseUrl}
+                        showToast={showToast}
+                        removeToast={removeToast}
+                      />
+                    </p>
                   </div>
                 </div>
 

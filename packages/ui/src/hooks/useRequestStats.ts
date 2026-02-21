@@ -35,6 +35,25 @@ export function useRequestStats() {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retriesRef = useRef(0);
   const unmountedRef = useRef(false);
+  const prefetchedRef = useRef(false);
+
+  // Pre-fetch stats via REST API for immediate first render
+  const prefetchStats = useCallback(async () => {
+    if (prefetchedRef.current) return;
+    prefetchedRef.current = true;
+    try {
+      const res = await fetch('/api/request-stats');
+      if (res.ok) {
+        const data = await res.json();
+        if (!unmountedRef.current && Array.isArray(data.stats)) {
+          setStats(data.stats);
+          setIsLoading(false);
+        }
+      }
+    } catch {
+      // Silently fail — SSE will provide data as fallback
+    }
+  }, []);
 
   const connect = useCallback(() => {
     if (unmountedRef.current) return;
@@ -98,6 +117,8 @@ export function useRequestStats() {
 
   useEffect(() => {
     unmountedRef.current = false;
+    // Pre-fetch via REST for immediate data, then establish SSE for live updates
+    prefetchStats();
     connect();
 
     return () => {
@@ -111,7 +132,7 @@ export function useRequestStats() {
         esRef.current = null;
       }
     };
-  }, [connect]);
+  }, [connect, prefetchStats]);
 
   return { stats, isLoading };
 }

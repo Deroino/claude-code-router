@@ -278,6 +278,11 @@ class ApiClient {
     });
   }
 
+  // Test provider URL connectivity
+  async testConnectivity(url: string): Promise<{ success: boolean; latency_ms: number; status?: number; error?: string }> {
+    return this.post<{ success: boolean; latency_ms: number; status?: number; error?: string }>("/connectivity-test", { url });
+  }
+
   // Get log files list
   async getLogFiles(): Promise<Array<{ name: string; path: string; size: number; lastModified: string }>> {
     return this.get<Array<{ name: string; path: string; size: number; lastModified: string }>>('/logs/files');
