@@ -27,6 +27,7 @@ import {
 } from "@CCR/shared";
 import fastifyMultipart from "@fastify/multipart";
 import AdmZip from "adm-zip";
+import { batchTestService } from "./batch-test-service";
 // requestStatsService and ConfigService are imported at the top level
 
 // Helper functions to detect and handle compressed/garbled error responses
@@ -1288,7 +1289,6 @@ export const createServer = async (config: any): Promise<any> => {
   });
 
   // ========== Backend Batch Test API ==========
-  const { batchTestService } = await import("./batch-test-service");
 
   // Mount references for batch test service to use
   (app as any)._server = server;
