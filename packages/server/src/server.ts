@@ -1291,8 +1291,8 @@ export const createServer = async (config: any): Promise<any> => {
   const { batchTestService } = await import("./batch-test-service");
 
   // Mount references for batch test service to use
-  app._server = server;
-  app.executeModelTest = executeModelTest;
+  (app as any)._server = server;
+  (app as any).executeModelTest = executeModelTest;
 
   // Start a batch test task
   app.post("/api/batch-test/start", async (req: any, reply: any) => {
