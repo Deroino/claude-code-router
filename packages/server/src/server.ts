@@ -713,6 +713,22 @@ export const createServer = async (config: any): Promise<any> => {
                       };
                       controller.enqueue(`data: ${JSON.stringify(event)}\n\n`);
                     }
+
+                    // Handle request completion logs for monitor panel status
+                    if (data.type === 'request_complete') {
+                      const event = {
+                        type: 'request_complete',
+                        data: {
+                          reqId: data.reqId,
+                          provider: data.provider,
+                          model: data.model,
+                          success: data.success,
+                          statusCode: data.statusCode,
+                          error: data.error,
+                        }
+                      };
+                      controller.enqueue(`data: ${JSON.stringify(event)}\n\n`);
+                    }
                   } catch (e) {
                     // Ignore parse errors
                   }

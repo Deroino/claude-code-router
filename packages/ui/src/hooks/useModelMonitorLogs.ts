@@ -10,6 +10,9 @@ export interface ModelMonitorLogEntry {
   scenarioType?: string;
   scenarioLabel?: string;
   raw: string;
+  status?: 'pending' | 'success' | 'failure';
+  statusCode?: number;
+  errorMessage?: string;
 }
 
 interface UseModelMonitorLogsProps {
@@ -79,13 +82,26 @@ export function useModelMonitorLogs({
               reqId: data.data.reqId,
               scenarioType: data.data.scenarioType,
               scenarioLabel: data.data.scenarioLabel,
-              raw: data.data.raw || JSON.stringify(data.data)
+              raw: data.data.raw || JSON.stringify(data.data),
+              status: 'pending',
             };
 
             setLogs(prev => {
               const newLogs = [...prev, logEntry];
               return newLogs.slice(-maxItems);
             });
+          } else if (data.type === 'request_complete' && data.data) {
+            // Update existing log entry status by reqId
+            setLogs(prev => prev.map(log =>
+              log.reqId === data.data.reqId
+                ? {
+                    ...log,
+                    status: data.data.success ? 'success' as const : 'failure' as const,
+                    statusCode: data.data.statusCode,
+                    errorMessage: data.data.error,
+                  }
+                : log
+            ));
           }
         } catch (e) {
           console.error('Error parsing SSE event:', e);

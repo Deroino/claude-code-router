@@ -98,6 +98,17 @@ async function handleTransformerEndpoint(
         return fallbackResult;
       }
     }
+    // Log unhandled request failure for monitor panel (network errors, etc.)
+    // Note: provider_response_error already logged in sendRequestToProvider
+    if (error.code !== 'provider_response_error') {
+      req.log.info({
+        type: 'request_complete',
+        provider: req.provider || 'unknown',
+        model: body?.model || 'unknown',
+        success: false,
+        error: error.message,
+      }, `Request error: ${error.message}`);
+    }
     throw error;
   }
 }
@@ -375,6 +386,15 @@ async function sendRequestToProvider(
     // Record failure statistics
     requestStatsService.recordFailure(provider.name, requestBody.model, requestBody, errorText, response.status);
 
+    // Log request completion for monitor panel (failure)
+    context.req.log.info({
+      type: 'request_complete',
+      provider: provider.name,
+      model: requestBody.model,
+      success: false,
+      statusCode: response.status,
+    }, `Request failed: ${provider.name}/${requestBody.model} - ${response.status}`);
+
     fastify.log.info(`[DEBUG] Error response received, checking transformers for model: ${requestBody.model}`);
 
     // Helper function to execute logErrorResponse on transformers
@@ -527,6 +547,15 @@ async function sendRequestToProvider(
       });
     }
   }
+
+  // Log request completion for monitor panel (success)
+  context.req.log.info({
+    type: 'request_complete',
+    provider: provider.name,
+    model: requestBody.model,
+    success: true,
+    statusCode: response.status,
+  }, `Request succeeded: ${provider.name}/${requestBody.model}`);
 
   return response;
 }

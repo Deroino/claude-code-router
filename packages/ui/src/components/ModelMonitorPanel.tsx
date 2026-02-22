@@ -92,7 +92,11 @@ export function ModelMonitorPanel({ logs, status, currentFile, onClose, onHoverM
             logs.map((log) => (
               <div
                 key={log.id}
-                className="rounded-sm border bg-white px-3 py-2 shadow-sm hover:shadow transition-all cursor-pointer"
+                className={`rounded-sm border bg-white px-3 py-2 shadow-sm hover:shadow transition-all cursor-pointer ${
+                  log.status === 'success' ? 'border-l-2 border-l-green-500' :
+                  log.status === 'failure' ? 'border-l-2 border-l-red-500' :
+                  ''
+                }`}
                 onMouseEnter={() => handleMouseEnter(log.provider, log.model)}
                 onMouseLeave={handleMouseLeave}
               >
@@ -101,6 +105,20 @@ export function ModelMonitorPanel({ logs, status, currentFile, onClose, onHoverM
                     <span className="font-semibold text-gray-500">{log.timestamp}</span>
                     {log.reqId && <span className="bg-gray-100 px-1 rounded text-gray-400">#{log.reqId.slice(-4)}</span>}
                   </div>
+                  {log.model && (
+                    <div className="flex items-center">
+                      {log.status === 'success' && (
+                        <span className="inline-block w-2 h-2 rounded-full bg-green-500" title="Success" />
+                      )}
+                      {log.status === 'failure' && (
+                        <span className="inline-block w-2 h-2 rounded-full bg-red-500"
+                              title={log.errorMessage ? `Error: ${log.errorMessage}` : `Failed${log.statusCode ? ` (${log.statusCode})` : ''}`} />
+                      )}
+                      {(!log.status || log.status === 'pending') && (
+                        <span className="inline-block w-2 h-2 rounded-full bg-gray-300 animate-pulse" title="Pending..." />
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="break-all leading-relaxed">
                   {log.model ? (
