@@ -5,6 +5,7 @@ import { CONFIG_FILE } from "@CCR/shared";
 import { join } from "path";
 import fastifyStatic from "@fastify/static";
 import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, rmSync, watch, openSync, readSync, closeSync } from "fs";
+import { stat } from "fs/promises";
 import { homedir } from "os";
 import { ProxyAgent } from "undici";
 import {
@@ -66,6 +67,10 @@ export const createServer = async (config: any): Promise<any> => {
   // Guard against self-triggered config watch events (internal writes from POST /api/config)
   let isInternalConfigWrite = false;
   let configWatchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  // Plugins directory watcher for hot-reload
+  let pluginsWatcher: any = null;
+  let pluginsWatchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const PLUGINS_DIR = join(homedir(), ".claude-code-router", "plugins");
 
   // Broadcast config change to all connected clients
   const broadcastConfigChange = (configData: any) => {
@@ -162,6 +167,31 @@ export const createServer = async (config: any): Promise<any> => {
     const backupPath = await backupConfigFile();
     if (backupPath) {
       console.log(`Backed up existing configuration file to ${backupPath}`);
+    }
+
+    // Detect removed transformers that point to plugins directory
+    // and delete the corresponding plugin files
+    try {
+      const oldConfig = await readConfigFile();
+      const oldTransformers = Array.isArray(oldConfig.transformers) ? oldConfig.transformers : [];
+      const newTransformers = Array.isArray(newConfig.transformers) ? newConfig.transformers : [];
+
+      // Find transformers that were removed
+      const oldPaths = new Set<string>(oldTransformers.map((t: any) => t.path).filter(Boolean) as string[]);
+      const newPaths = new Set<string>(newTransformers.map((t: any) => t.path).filter(Boolean) as string[]);
+
+      for (const oldPath of oldPaths) {
+        if (!newPaths.has(oldPath) && oldPath.startsWith(PLUGINS_DIR)) {
+          // This transformer was removed and points to plugins directory
+          // Delete the plugin file
+          if (existsSync(oldPath)) {
+            console.log(`Deleting plugin file (removed from config): ${oldPath}`);
+            unlinkSync(oldPath);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error detecting removed transformers:', err);
     }
 
     // Add lastModified timestamp
@@ -1524,6 +1554,96 @@ export const createServer = async (config: any): Promise<any> => {
   } catch (err) {
     console.error('Error setting up config file watcher:', err);
   }
+
+  // Watch plugins directory for hot-reload of custom transformers
+  try {
+    // Check if plugins directory exists, skip watcher if not
+    const pluginsDirStats = await stat(PLUGINS_DIR).catch(() => null);
+    if (!pluginsDirStats || !pluginsDirStats.isDirectory()) {
+      console.log('Plugins directory not found, skipping watcher');
+    } else {
+      pluginsWatcher = watch(PLUGINS_DIR, { persistent: true }, async (eventType, filename) => {
+        // Filter for .js files only
+        if (filename && !filename.endsWith('.js')) {
+          return;
+        }
+
+        // Debounce: fs.watch may fire multiple times for a single write
+        if (pluginsWatchDebounceTimer) {
+          clearTimeout(pluginsWatchDebounceTimer);
+        }
+        pluginsWatchDebounceTimer = setTimeout(async () => {
+          try {
+            console.log('Plugins directory changed, syncing to config.transformers...');
+
+            // Step 1: Scan plugins directory for all .js files
+            const { readdirSync } = await import('fs');
+            const pluginFiles = readdirSync(PLUGINS_DIR).filter((f: string) => f.endsWith('.js'));
+            const pluginPaths = new Set(pluginFiles.map((f: string) => join(PLUGINS_DIR, f)));
+
+            // Step 2: Read current config.transformers
+            const currentConfig = await readConfigFile();
+            const currentTransformers = Array.isArray(currentConfig.transformers) ? currentConfig.transformers : [];
+
+            // Step 3: Calculate differences
+            const newTransformers = [...currentTransformers];
+            let configChanged = false;
+
+            // Find plugins that need to be added (in directory but not in config)
+            for (const pluginPath of pluginPaths) {
+              const existsInConfig = currentTransformers.some(
+                (t: any) => t.path === pluginPath
+              );
+              if (!existsInConfig) {
+                console.log(`Adding plugin to config: ${pluginPath}`);
+                newTransformers.push({ path: pluginPath, options: {} });
+                configChanged = true;
+              }
+            }
+
+            // Find plugins that need to be removed (in config but not in directory)
+            // Only remove entries that point to plugins directory
+            for (let i = newTransformers.length - 1; i >= 0; i--) {
+              const transformer = newTransformers[i];
+              if (transformer.path && transformer.path.startsWith(PLUGINS_DIR)) {
+                if (!pluginPaths.has(transformer.path)) {
+                  console.log(`Removing plugin from config: ${transformer.path}`);
+                  newTransformers.splice(i, 1);
+                  configChanged = true;
+                }
+              }
+            }
+
+            // Step 4: Write updated config if changed
+            if (configChanged) {
+              await backupConfigFile();
+              await writeConfigFile({ ...currentConfig, transformers: newTransformers });
+              console.log('Config.synced with plugins directory');
+            } else {
+              console.log('Config already in sync with plugins directory');
+            }
+          } catch (err) {
+            console.error('Error syncing plugins to config:', err);
+          }
+        }, 300);
+      });
+      console.log('Plugins directory watcher started:', PLUGINS_DIR);
+    }
+  } catch (err) {
+    console.error('Error setting up plugins directory watcher:', err);
+  }
+
+  // Cleanup watchers on server close
+  app.addHook('onClose', async () => {
+    if (configWatcher) {
+      configWatcher.close();
+      console.log('Config watcher closed');
+    }
+    if (pluginsWatcher) {
+      pluginsWatcher.close();
+      console.log('Plugins watcher closed');
+    }
+  });
 
   return server;
 };

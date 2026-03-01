@@ -90,7 +90,13 @@ export class TransformerService {
   }): Promise<boolean> {
     try {
       if (config.path) {
-        const module = require(require.resolve(config.path));
+        // Clear require cache to ensure fresh load of modified plugins
+        const resolvedPath = require.resolve(config.path);
+        if (require.cache[resolvedPath]) {
+          delete require.cache[resolvedPath];
+        }
+
+        const module = require(resolvedPath);
         if (module) {
           const instance = new module(config.options);
           // Set logger for transformer instance
