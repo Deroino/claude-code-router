@@ -8,7 +8,7 @@ module.exports = class ClaudeCodeHeadersTransformer {
   static TransformerName = "claude-code-headers";
 
   constructor(options = {}) {
-    this.name = 'claude-code-headers';
+    this.name = 'claude-code-cli-headers';
   }
 
   /**

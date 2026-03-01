@@ -5,7 +5,7 @@ module.exports = class DebugTransformer {
   static TransformerName = "debug";
 
   constructor(options = {}) {
-    this.name = 'debug';
+    this.name = 'ccr-debug-transformer';
     this.logFilePath = options.logFilePath || '/tmp/ccr-debug-transformer.log';
     this.logOnlyOnError = options.logOnlyOnError !== undefined ? options.logOnlyOnError : false;
     this.requestBuffer = new Map(); // 存储请求数据，出错时才写入

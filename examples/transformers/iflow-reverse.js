@@ -254,7 +254,7 @@ module.exports = class IFlowTransformer {
    * @param {boolean} [options.enableTelemetry=true] - Enable telemetry sending
    */
   constructor(options = {}) {
-    this.name = 'iflow';
+    this.name = 'iflow-reverse';
     this.options = options;
     this.debug = options.debug || false;
     this.enableTelemetry = options.enableTelemetry !== false;
