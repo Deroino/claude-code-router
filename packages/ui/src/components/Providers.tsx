@@ -79,6 +79,8 @@ export function Providers({
   const [batchTestResults, setBatchTestResults] = useState<BatchTestResult[]>([]);
   const [isBatchTesting, setIsBatchTesting] = useState<boolean>(false);
   const [batchTestConcurrency, setBatchTestConcurrency] = useState<number>(20);
+  const [batchTestStartedAt, setBatchTestStartedAt] = useState<number | null>(null);
+  const [batchTestCompletedAt, setBatchTestCompletedAt] = useState<number | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Poll backend batch test status
@@ -87,6 +89,12 @@ export function Providers({
       const status = await api.getBatchTestStatus();
       if (status.results?.length > 0) {
         setBatchTestResults(status.results);
+      }
+      if (status.startedAt !== undefined) {
+        setBatchTestStartedAt(status.startedAt);
+      }
+      if (status.completedAt !== undefined) {
+        setBatchTestCompletedAt(status.completedAt);
       }
       if (status.status === 'running' || status.status === 'cancelling') {
         setIsBatchTesting(true);
@@ -118,14 +126,29 @@ export function Providers({
       if (status.concurrency) {
         setBatchTestConcurrency(status.concurrency);
       }
+      if (status.startedAt !== undefined) {
+        setBatchTestStartedAt(status.startedAt);
+      }
+      if (status.completedAt !== undefined) {
+        setBatchTestCompletedAt(status.completedAt);
+      }
       if (status.status === 'running' || status.status === 'cancelling') {
         setIsBatchTesting(true);
         setShowBatchTestDialog(true);
         startPolling();
+      } else if (status.status === 'idle' || status.status === 'completed') {
+        // Try to load persisted results if no results from status
+        if (!status.results?.length) {
+          api.getBatchTestResults().then(data => {
+            if (data?.results?.length > 0) {
+              setBatchTestResults(data.results);
+            }
+          }).catch(() => {});
+        }
       }
     }).catch(e => {
       console.error('Failed to load batch test status:', e);
-      // Fallback: try legacy endpoint
+      // Fallback: try to load persisted results
       api.getBatchTestResults().then(data => {
         if (data?.results?.length > 0) {
           setBatchTestResults(data.results);
@@ -834,14 +857,46 @@ export function Providers({
       return;
     }
 
-    // Create initial idle results for display
-    const freshResults: BatchTestResult[] = allTests.map(({ provider, model }) => ({
-      provider,
-      model,
-      status: "idle" as const,
-    }));
+    // Try to load persisted results first
+    try {
+      const data = await api.getBatchTestResults();
+      if (data?.results?.length > 0) {
+        // Merge persisted results with current providers
+        const persistedMap = new Map<string, BatchTestResult>();
+        for (const r of data.results) {
+          persistedMap.set(`${r.provider}-${r.model}`, r);
+        }
+        // Use persisted result if exists, otherwise create idle
+        const mergedResults: BatchTestResult[] = allTests.map(({ provider, model }) => {
+          const key = `${provider}-${model}`;
+          return persistedMap.get(key) || { provider, model, status: "idle" as const };
+        });
+        setBatchTestResults(mergedResults);
+        if (data.startedAt) setBatchTestStartedAt(data.startedAt);
+        if (data.completedAt) setBatchTestCompletedAt(data.completedAt);
+      } else {
+        // No persisted results, create fresh idle results
+        const freshResults: BatchTestResult[] = allTests.map(({ provider, model }) => ({
+          provider,
+          model,
+          status: "idle" as const,
+        }));
+        setBatchTestResults(freshResults);
+        setBatchTestStartedAt(null);
+        setBatchTestCompletedAt(null);
+      }
+    } catch {
+      // Failed to load persisted results, create fresh idle results
+      const freshResults: BatchTestResult[] = allTests.map(({ provider, model }) => ({
+        provider,
+        model,
+        status: "idle" as const,
+      }));
+      setBatchTestResults(freshResults);
+      setBatchTestStartedAt(null);
+      setBatchTestCompletedAt(null);
+    }
 
-    setBatchTestResults(freshResults);
     setShowBatchTestDialog(true);
     // Don't auto-start, let user select and run
   };
@@ -1582,6 +1637,40 @@ export function Providers({
         isRunning={isBatchTesting}
         concurrency={batchTestConcurrency}
         onConcurrencyChange={setBatchTestConcurrency}
+        startedAt={batchTestStartedAt}
+        completedAt={batchTestCompletedAt}
+        providerApiUrls={Object.fromEntries(
+          validProviders
+            .filter(p => p.name && p.api_base_url)
+            .map(p => [p.name, p.api_base_url])
+        )}
+        onTestConnectivity={async (provider: string, url: string) => {
+          const toastId = showToast(t("provider_list.connectivity_testing", { url }), 'warning', 0);
+          try {
+            const result = await api.testConnectivity(url);
+            removeToast(toastId);
+            if (result?.success) {
+              showToast(
+                t("provider_list.connectivity_ok", { url, ms: result.latency_ms, status: result.status }),
+                'success',
+                5000
+              );
+            } else {
+              showToast(
+                t("provider_list.connectivity_fail", { url, error: result?.error || 'Unknown error' }),
+                'error',
+                8000
+              );
+            }
+          } catch (err: any) {
+            removeToast(toastId);
+            showToast(
+              t("provider_list.connectivity_fail", { url, error: err?.message || 'Network error' }),
+              'error',
+              5000
+            );
+          }
+        }}
       />
     </Card>
   );

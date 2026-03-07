@@ -383,8 +383,8 @@ class ApiClient {
   // ========== Batch Test Results API ==========
 
   // Get batch test results from server
-  async getBatchTestResults(): Promise<{ results: any[] }> {
-    return this.get<{ results: any[] }>('/batch-test-results');
+  async getBatchTestResults(): Promise<{ results: any[]; startedAt?: number | null; completedAt?: number | null }> {
+    return this.get<{ results: any[]; startedAt?: number | null; completedAt?: number | null }>('/batch-test-results');
   }
 
   // Save batch test results to server (overwrites previous)

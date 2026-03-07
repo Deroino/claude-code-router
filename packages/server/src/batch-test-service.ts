@@ -224,7 +224,11 @@ class BatchTestService {
       }
       writeFileSync(
         BATCH_TEST_RESULTS_FILE,
-        JSON.stringify({ results: this.results }, null, 2),
+        JSON.stringify({
+          results: this.results,
+          startedAt: this.startedAt,
+          completedAt: this.completedAt,
+        }, null, 2),
         "utf-8"
       );
     } catch (err) {
