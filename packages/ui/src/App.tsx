@@ -27,7 +27,9 @@ import {
   Route,
   Workflow,
   Layers,
-  LayoutDashboard
+  LayoutDashboard,
+  Menu,
+  X
 } from "lucide-react";
 import {
   Popover,
@@ -56,6 +58,7 @@ function App() {
   const [isJsonEditorOpen, setIsJsonEditorOpen] = useState(false);
   const [isLogViewerOpen, setIsLogViewerOpen] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // Panel visibility states
   const [showProviders, setShowProviders] = useState(true);
@@ -379,11 +382,13 @@ function App() {
   return (
     <TooltipProvider>
       <div className="h-screen bg-gray-50 font-sans">
-      <header className="flex h-16 items-center justify-between border-b bg-white px-4">
-        {/* Left side - Panel Toggles */}
+      <header className="flex h-14 md:h-16 items-center justify-between border-b bg-white px-2 md:px-4">
+        {/* Left side - Title and Mobile Menu */}
         <div className="flex items-center gap-2">
-          <h1 className="text-lg font-semibold text-gray-800 mr-4">{t('app.title')}</h1>
-          <div className="flex items-center gap-1 border-r pr-4 mr-2">
+          <h1 className="text-base md:text-lg font-semibold text-gray-800">{t('app.title')}</h1>
+          
+          {/* Desktop Panel Toggles */}
+          <div className="hidden lg:flex items-center gap-1 border-l pl-4 ml-4">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -468,112 +473,253 @@ function App() {
         </div>
 
         {/* Right side - System Controls */}
-        <div className="flex items-center gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={() => setIsSettingsOpen(true)} className="transition-all-ease hover:scale-110">
-                <Settings className="h-5 w-5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>{t('app.settings')}</p>
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={() => setIsJsonEditorOpen(true)} className="transition-all-ease hover:scale-110">
-                <FileJson className="h-5 w-5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>{t('app.json_editor')}</p>
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={() => setIsLogViewerOpen(true)} className="transition-all-ease hover:scale-110">
-                <FileText className="h-5 w-5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>{t('app.log_viewer')}</p>
-            </TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={() => navigate('/presets')} className="transition-all-ease hover:scale-110">
-                <FileCog className="h-5 w-5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>{t('app.presets')}</p>
-            </TooltipContent>
-          </Tooltip>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="ghost" size="icon" className="transition-all-ease hover:scale-110">
-                <Languages className="h-5 w-5" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-32 p-2">
-              <div className="space-y-1">
+        <div className="flex items-center gap-1 md:gap-2">
+          {/* Mobile Menu Button */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="lg:hidden"
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+          >
+            {isMobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </Button>
+          
+          {/* Desktop Controls */}
+          <div className="hidden md:flex items-center gap-2">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" onClick={() => setIsSettingsOpen(true)} className="transition-all-ease hover:scale-110">
+                  <Settings className="h-5 w-5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{t('app.settings')}</p>
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" onClick={() => setIsJsonEditorOpen(true)} className="transition-all-ease hover:scale-110">
+                  <FileJson className="h-5 w-5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{t('app.json_editor')}</p>
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" onClick={() => setIsLogViewerOpen(true)} className="transition-all-ease hover:scale-110">
+                  <FileText className="h-5 w-5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{t('app.log_viewer')}</p>
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" onClick={() => navigate('/presets')} className="transition-all-ease hover:scale-110">
+                  <FileCog className="h-5 w-5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{t('app.presets')}</p>
+              </TooltipContent>
+            </Tooltip>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" size="icon" className="transition-all-ease hover:scale-110">
+                  <Languages className="h-5 w-5" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-32 p-2">
+                <div className="space-y-1">
+                  <Button
+                    variant={i18n.language.startsWith('en') ? 'default' : 'ghost'}
+                    className="w-full justify-start transition-all-ease hover:scale-[1.02]"
+                    onClick={() => i18n.changeLanguage('en')}
+                  >
+                    {t('app.language_english')}
+                  </Button>
+                  <Button
+                    variant={i18n.language.startsWith('zh') ? 'default' : 'ghost'}
+                    className="w-full justify-start transition-all-ease hover:scale-[1.02]"
+                    onClick={() => i18n.changeLanguage('zh')}
+                  >
+                    {t('app.language_chinese')}
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+            {/* 更新版本按钮 - 仅当更新功能可用时显示 */}
+            {isUpdateFeatureAvailable && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => checkForUpdates(true)}
+                    disabled={isCheckingUpdate}
+                    className="transition-all-ease hover:scale-110 relative"
+                  >
+                    <div className="relative">
+                      <CircleArrowUp className="h-5 w-5" />
+                      {isNewVersionAvailable && !isCheckingUpdate && (
+                        <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white"></div>
+                      )}
+                    </div>
+                    {isCheckingUpdate && (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></div>
+                      </div>
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>{t('app.check_updates')}</p>
+                </TooltipContent>
+              </Tooltip>
+            )}
+            <Button onClick={restartService} disabled={isRestarting} className="transition-all-ease hover:scale-[1.02] active:scale-[0.98]">
+              <RefreshCw className={`mr-2 h-4 w-4 ${isRestarting ? 'animate-spin' : ''}`} />
+              {isRestarting ? (t('app.restarting') || 'Restarting...') : t('app.restart')}
+            </Button>
+          </div>
+          
+          {/* Mobile Restart Button */}
+          <Button 
+            onClick={restartService} 
+            disabled={isRestarting} 
+            size="sm"
+            className="md:hidden transition-all-ease"
+          >
+            <RefreshCw className={`h-4 w-4 ${isRestarting ? 'animate-spin' : ''}`} />
+          </Button>
+        </div>
+      </header>
+      
+      {/* Mobile Dropdown Menu */}
+      {isMobileMenuOpen && (
+        <div className="lg:hidden fixed top-14 left-0 right-0 z-50 bg-white border-b shadow-lg animate-fade-in">
+          <div className="p-3 space-y-2 max-h-[calc(100vh-4rem)] overflow-y-auto">
+            {/* Panel Toggles */}
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-gray-500 uppercase px-2">{t('navbar.panels') || 'Panels'}</p>
+              <div className="flex flex-wrap gap-2">
                 <Button
-                  variant={i18n.language.startsWith('en') ? 'default' : 'ghost'}
-                  className="w-full justify-start transition-all-ease hover:scale-[1.02]"
-                  onClick={() => i18n.changeLanguage('en')}
+                  variant={showProviders ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => { setShowProviders(!showProviders); setIsMobileMenuOpen(false); }}
+                >
+                  <Server className="h-4 w-4 mr-1.5" />
+                  {t('navbar.providers')}
+                </Button>
+                <Button
+                  variant={showRouter ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => { setShowRouter(!showRouter); setIsMobileMenuOpen(false); }}
+                >
+                  <Route className="h-4 w-4 mr-1.5" />
+                  {t('navbar.router')}
+                </Button>
+                <Button
+                  variant={showTransformers ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => { setShowTransformers(!showTransformers); setIsMobileMenuOpen(false); }}
+                >
+                  <Workflow className="h-4 w-4 mr-1.5" />
+                  {t('navbar.transformers')}
+                </Button>
+                <Button
+                  variant={showModelGroups ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => { setShowModelGroups(!showModelGroups); setIsMobileMenuOpen(false); }}
+                >
+                  <Layers className="h-4 w-4 mr-1.5" />
+                  {t('navbar.groups')}
+                </Button>
+                <Button
+                  variant={showModelMonitor ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => { setShowModelMonitor(!showModelMonitor); setIsMobileMenuOpen(false); }}
+                >
+                  <Activity className="h-4 w-4 mr-1.5" />
+                  {t('navbar.monitor')}
+                </Button>
+              </div>
+            </div>
+            
+            {/* Actions */}
+            <div className="space-y-1 pt-2 border-t">
+              <p className="text-xs font-medium text-gray-500 uppercase px-2">{t('navbar.actions') || 'Actions'}</p>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" size="sm" onClick={() => { setIsSettingsOpen(true); setIsMobileMenuOpen(false); }}>
+                  <Settings className="h-4 w-4 mr-1.5" />
+                  {t('app.settings')}
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => { setIsJsonEditorOpen(true); setIsMobileMenuOpen(false); }}>
+                  <FileJson className="h-4 w-4 mr-1.5" />
+                  {t('app.json_editor')}
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => { setIsLogViewerOpen(true); setIsMobileMenuOpen(false); }}>
+                  <FileText className="h-4 w-4 mr-1.5" />
+                  {t('app.log_viewer')}
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => { navigate('/presets'); setIsMobileMenuOpen(false); }}>
+                  <FileCog className="h-4 w-4 mr-1.5" />
+                  {t('app.presets')}
+                </Button>
+              </div>
+            </div>
+            
+            {/* Language */}
+            <div className="space-y-1 pt-2 border-t">
+              <p className="text-xs font-medium text-gray-500 uppercase px-2">{t('navbar.language') || 'Language'}</p>
+              <div className="flex gap-2">
+                <Button
+                  variant={i18n.language.startsWith('en') ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => { i18n.changeLanguage('en'); setIsMobileMenuOpen(false); }}
                 >
                   {t('app.language_english')}
                 </Button>
                 <Button
-                  variant={i18n.language.startsWith('zh') ? 'default' : 'ghost'}
-                  className="w-full justify-start transition-all-ease hover:scale-[1.02]"
-                  onClick={() => i18n.changeLanguage('zh')}
+                  variant={i18n.language.startsWith('zh') ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => { i18n.changeLanguage('zh'); setIsMobileMenuOpen(false); }}
                 >
                   {t('app.language_chinese')}
                 </Button>
               </div>
-            </PopoverContent>
-          </Popover>
-          {/* 更新版本按钮 - 仅当更新功能可用时显示 */}
-          {isUpdateFeatureAvailable && (
-            <Tooltip>
-              <TooltipTrigger asChild>
+            </div>
+            
+            {/* Update */}
+            {isUpdateFeatureAvailable && (
+              <div className="pt-2 border-t">
                 <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => checkForUpdates(true)}
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => { checkForUpdates(true); setIsMobileMenuOpen(false); }}
                   disabled={isCheckingUpdate}
-                  className="transition-all-ease hover:scale-110 relative"
                 >
-                  <div className="relative">
-                    <CircleArrowUp className="h-5 w-5" />
-                    {isNewVersionAvailable && !isCheckingUpdate && (
-                      <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white"></div>
-                    )}
-                  </div>
-                  {isCheckingUpdate && (
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></div>
-                    </div>
+                  <CircleArrowUp className="h-4 w-4 mr-1.5" />
+                  {t('app.check_updates')}
+                  {isNewVersionAvailable && (
+                    <span className="ml-2 w-2 h-2 bg-red-500 rounded-full" />
                   )}
                 </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{t('app.check_updates')}</p>
-              </TooltipContent>
-            </Tooltip>
-          )}
-          <Button onClick={restartService} disabled={isRestarting} className="transition-all-ease hover:scale-[1.02] active:scale-[0.98]">
-            <RefreshCw className={`mr-2 h-4 w-4 ${isRestarting ? 'animate-spin' : ''}`} />
-            {isRestarting ? (t('app.restarting') || 'Restarting...') : t('app.restart')}
-          </Button>
+              </div>
+            )}
+          </div>
         </div>
-      </header>
+      )}
 
-      <main className="flex h-[calc(100vh-4rem)] gap-4 p-4 overflow-hidden">
+      <main className="flex flex-col lg:flex-row h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4rem)] gap-2 md:gap-4 p-2 md:p-4 overflow-hidden">
+        {/* Mobile: Stack panels vertically, Desktop: Horizontal layout */}
         {/* Left Column: Providers */}
         {showProviders && (
-          <div className="flex-1 min-w-0 animate-slide-in">
+          <div className="flex-1 min-w-0 min-h-0 animate-slide-in lg:flex-initial lg:w-[480px] lg:min-w-[400px] lg:max-w-[600px]">
             <Providers
               showToast={showToast}
               updateToast={updateToast}
@@ -586,7 +732,7 @@ function App() {
 
         {/* Middle Column: Router + Model Groups + Transformers */}
         {(showRouter || showTransformers || showModelGroups) && (
-          <div className="flex flex-1 flex-col gap-4 min-w-0 animate-slide-in">
+          <div className="flex flex-col flex-1 gap-2 md:gap-4 min-w-0 min-h-0 animate-slide-in">
             {showRouter && (
               <div className="flex-1 min-h-0">
                 <Router hoveredModel={hoveredModel} onHoverModel={handleHoverModel} requestStats={requestStats} />
@@ -607,7 +753,7 @@ function App() {
 
         {/* Right Column: Model Monitor */}
         {showModelMonitor && (
-          <div className="w-96 min-w-0 animate-slide-in shrink-0">
+          <div className="flex-1 lg:w-96 lg:min-w-0 lg:shrink-0 animate-slide-in">
             <ModelMonitorPanel
               logs={modelMonitorLogs}
               status={modelMonitorStatus}

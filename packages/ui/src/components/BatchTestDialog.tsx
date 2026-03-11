@@ -360,10 +360,10 @@ export function BatchTestDialog({
         </DialogHeader>
 
         {/* Filter and Actions */}
-        <div className="flex flex-wrap items-center gap-2 justify-between">
-          <div className="flex items-center gap-2">
-            <Filter className="h-4 w-4 text-gray-500" />
-            <div className="flex gap-2">
+        <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 sm:justify-between">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Filter className="h-4 w-4 text-gray-500 hidden sm:block" />
+            <div className="flex gap-2 flex-wrap">
               <Button
                 variant={statusFilter === "all" ? "default" : "outline"}
                 size="sm"
@@ -390,14 +390,14 @@ export function BatchTestDialog({
             </div>
           </div>
 
-          <div className="flex gap-2 items-center">
-            <div className="relative">
+          <div className="flex gap-2 items-center flex-wrap">
+            <div className="relative flex-1 sm:flex-none">
               <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
               <Input
                 placeholder={t("batch_test.search")}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-8 w-48"
+                className="pl-8 w-full sm:w-48"
               />
               {searchTerm && (
                 <Button
@@ -415,16 +415,16 @@ export function BatchTestDialog({
               size="sm"
               onClick={handleCopyResults}
             >
-              <Copy className="h-4 w-4 mr-1" />
-              {t("batch_test.copy")}
+              <Copy className="h-4 w-4 sm:mr-1" />
+              <span className="hidden sm:inline">{t("batch_test.copy")}</span>
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={handleDownloadResults}
             >
-              <Download className="h-4 w-4 mr-1" />
-              {t("batch_test.export")}
+              <Download className="h-4 w-4 sm:mr-1" />
+              <span className="hidden sm:inline">{t("batch_test.export")}</span>
             </Button>
           </div>
         </div>
@@ -658,7 +658,8 @@ export function BatchTestDialog({
 
                     {/* Models Table (when expanded) */}
                     {!isCollapsed && (
-                      <table className="w-full text-sm">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm min-w-[500px]">
                         <thead className="bg-gray-50/50">
                           <tr>
                             <th className="w-10 p-2 border-b text-center whitespace-nowrap"></th>
@@ -771,6 +772,7 @@ export function BatchTestDialog({
                           ))}
                         </tbody>
                       </table>
+                      </div>
                     )}
                   </div>
                 );

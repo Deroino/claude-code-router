@@ -22,6 +22,7 @@ import { ComboInput } from "@/components/ui/combo-input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
+import { getRequestStatus, getStatusBadgeClasses } from "@/lib/requestStatus";
 import type { Provider } from "@/types";
 import { BatchTestDialog } from "./BatchTestDialog";
 import type { BatchTestResult } from "./BatchTestDialog";
@@ -707,6 +708,14 @@ export function Providers({
         const models: ModelData[] = data.data;
         setFetchedModels(models);
 
+        // Mark that models have been fetched for this provider
+        if (editingProviderIndex !== null) {
+          setHasFetchedModels(prev => ({
+            ...prev,
+            [editingProviderIndex]: true
+          }));
+        }
+
         // Pre-select models that are already in the provider's model list
         const existingModels = editingProviderData.models || [];
         const preSelected = new Set<string>();
@@ -757,15 +766,26 @@ export function Providers({
 
   // Confirm model selection and add to provider
   const handleConfirmModelSelection = () => {
-    if (!editingProviderData) return;
-
-    const existingModels = Array.isArray(editingProviderData.models) ? [...editingProviderData.models] : [];
+    // Calculate new models to add before state updates
+    const existingModels = editingProviderData?.models || [];
     const newModels = Array.from(selectedModels).filter(id => !existingModels.includes(id));
 
     if (newModels.length > 0) {
-      const updatedProvider = { ...editingProviderData };
-      updatedProvider.models = [...existingModels, ...newModels];
-      setEditingProviderData(updatedProvider);
+      // Use functional update to ensure we have the latest state
+      setEditingProviderData(prev => {
+        if (!prev) return prev;
+
+        const prevModels = Array.isArray(prev.models) ? [...prev.models] : [];
+        const modelsToAdd = Array.from(selectedModels).filter(id => !prevModels.includes(id));
+
+        if (modelsToAdd.length > 0) {
+          return {
+            ...prev,
+            models: [...prevModels, ...modelsToAdd]
+          };
+        }
+        return prev;
+      });
       showToast(`Added ${newModels.length} model(s)`, "success");
     }
 
@@ -1121,7 +1141,7 @@ export function Providers({
               <div className="space-y-2">
                 <Label htmlFor="models">{t("providers.models")}</Label>
                 <div className="space-y-2">
-                  <div className="flex gap-2">
+                  <div className="flex flex-col sm:flex-row gap-2">
                     <div className="flex-1">
                       {hasFetchedModels[editingProviderIndex] ? (
                         <ComboInput
@@ -1151,58 +1171,65 @@ export function Providers({
                         />
                       )}
                     </div>
-                    <Button
-                      onClick={() => {
-                        if (hasFetchedModels[editingProviderIndex] && comboInputRef.current) {
-                          // 使用ComboInput的逻辑
-                          const comboInput = comboInputRef.current as unknown as { getCurrentValue(): string; clearInput(): void };
-                          const currentValue = comboInput.getCurrentValue();
-                          if (currentValue && currentValue.trim() && editingProviderIndex !== null) {
-                            handleAddModel(editingProviderIndex, currentValue.trim());
-                            // 清空ComboInput
-                            comboInput.clearInput();
+                    <div className="flex gap-2">
+                      <Button
+                        className="flex-1 sm:flex-none"
+                        onClick={() => {
+                          if (hasFetchedModels[editingProviderIndex] && comboInputRef.current) {
+                            // 使用ComboInput的逻辑
+                            const comboInput = comboInputRef.current as unknown as { getCurrentValue(): string; clearInput(): void };
+                            const currentValue = comboInput.getCurrentValue();
+                            if (currentValue && currentValue.trim() && editingProviderIndex !== null) {
+                              handleAddModel(editingProviderIndex, currentValue.trim());
+                              // 清空ComboInput
+                              comboInput.clearInput();
+                            }
+                          } else {
+                            // 使用普通Input的逻辑
+                            const input = document.getElementById('models') as HTMLInputElement;
+                            if (input && input.value.trim() && editingProviderIndex !== null) {
+                              handleAddModel(editingProviderIndex, input.value);
+                              input.value = '';
+                            }
                           }
-                        } else {
-                          // 使用普通Input的逻辑
-                          const input = document.getElementById('models') as HTMLInputElement;
-                          if (input && input.value.trim() && editingProviderIndex !== null) {
-                            handleAddModel(editingProviderIndex, input.value);
-                            input.value = '';
-                          }
-                        }
-                      }}
-                    >
-                      {t("providers.add_model")}
-                    </Button>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            onClick={handleFetchModels}
-                            disabled={isFetchingModels}
-                          >
-                            {isFetchingModels ? "..." : t('model_selector.fetch_from_endpoint')}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>{t('model_selector.fetch_description')}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
+                        }}
+                      >
+                        {t("providers.add_model")}
+                      </Button>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              className="flex-1 sm:flex-none"
+                              onClick={handleFetchModels}
+                              disabled={isFetchingModels}
+                            >
+                              {isFetchingModels ? "..." : t('model_selector.fetch_from_endpoint')}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>{t('model_selector.fetch_description')}</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
                   </div>
                   <div className="flex flex-wrap gap-2 pt-2">
-                    {(editingProvider.models || []).map((model: string, modelIndex: number) => (
-                      <Badge key={modelIndex} variant="outline" className="font-normal flex items-center gap-1">
-                        {model}
-                        <button
-                          type="button"
-                          className="ml-1 rounded-full hover:bg-gray-200"
-                          onClick={() => editingProviderIndex !== null && handleRemoveModel(editingProviderIndex, modelIndex)}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
+                    {(editingProvider.models || []).map((model: string, modelIndex: number) => {
+                      const status = getRequestStatus(requestStats, editingProvider.name || '', model);
+                      return (
+                        <Badge key={modelIndex} variant="outline" className={`font-normal flex items-center gap-1 ${getStatusBadgeClasses(status)}`}>
+                          {model}
+                          <button
+                            type="button"
+                            className="ml-1 rounded-full hover:bg-gray-200"
+                            onClick={() => editingProviderIndex !== null && handleRemoveModel(editingProviderIndex, modelIndex)}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      );
+                    })}
                   </div>
                 </div>
               </div>

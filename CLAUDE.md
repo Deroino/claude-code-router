@@ -4,10 +4,11 @@
 
 ```bash
 pnpm build          # Build all packages
-pnpm dev:ui         # Develop UI (Vite)
 ./dev-rebuild.sh    # Clean, build, install globally, restart
 pnpm release        # Build and publish all packages
 ```
+
+**开发方式**：不要用 `pnpm dev:ui`，会在运行时报错。唯一正确的开发流程是运行 `./dev-rebuild.sh`，它会自动完成构建、全局安装并重启服务。
 
 ## Core Architecture
 

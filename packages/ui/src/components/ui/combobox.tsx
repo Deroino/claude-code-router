@@ -27,6 +27,45 @@ interface ComboboxOption {
   isGroup?: boolean;
 }
 
+// Custom filter: sort by status priority first, then by search match
+const createCustomFilter = (options: ComboboxOption[]) => {
+  return (value: string, search: string): number => {
+    const option = options.find(o => o.value === value);
+    if (!option) return 0;
+
+    // Status priority: success=2, neutral=1, error=0
+    const statusPriority = option.status === 'success' ? 2 :
+                           option.status === 'neutral' ? 1 : 0;
+
+    // If no search, just return status priority
+    if (!search.trim()) {
+      return statusPriority;
+    }
+
+    // Check search match in label
+    const searchLower = search.toLowerCase();
+    const labelLower = option.label.toLowerCase();
+
+    // Exact match gets highest
+    if (labelLower === searchLower) {
+      return 100 + statusPriority;
+    }
+
+    // Starts with gets high
+    if (labelLower.startsWith(searchLower)) {
+      return 50 + statusPriority;
+    }
+
+    // Contains gets medium
+    if (labelLower.includes(searchLower)) {
+      return 20 + statusPriority;
+    }
+
+    // No match, but still show with status priority for fuzzy match
+    return statusPriority;
+  };
+};
+
 interface ComboboxProps {
   options: ComboboxOption[];
   value?: string;
@@ -96,7 +135,7 @@ export function Combobox({
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[--radix-popover-trigger-width] p-0 animate-fade-in">
-        <Command>
+        <Command filter={createCustomFilter(options)}>
           <CommandInput placeholder={searchPlaceholder} />
           <CommandList>
             <CommandEmpty>{emptyPlaceholder}</CommandEmpty>

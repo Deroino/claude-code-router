@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
+import { getRequestStatus, getRequestStatsItem } from "@/lib/requestStatus";
 import type { Provider } from "@/types";
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
 import { useState, useRef, useEffect, useCallback } from "react";
@@ -54,7 +55,7 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
   }, [onBadgeRef, providerName, model]);
 
   // Find stats for current provider:model
-  const stats = requestStats?.find(s => s.provider === providerName && s.model === model);
+  const stats = getRequestStatsItem(requestStats, providerName, model);
   const successCount = stats?.success || 0;
   const failCount = stats?.fail || 0;
   const lastSuccessRequest = stats?.lastSuccessRequest;
@@ -62,11 +63,15 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
 
   // Determine badge background color based on most recent event
   const getBadgeBackgroundClass = () => {
-    if (!lastSuccessRequest && !lastFailureRequest) return 'bg-white';
-    // Compare timestamps: show color based on most recent event
-    const successTime = lastSuccessRequest ? new Date(lastSuccessRequest.timestamp).getTime() : 0;
-    const failureTime = lastFailureRequest ? new Date(lastFailureRequest.timestamp).getTime() : 0;
-    return failureTime > successTime ? 'bg-red-200' : 'bg-green-200';
+    const status = getRequestStatus(requestStats, providerName, model);
+    switch (status) {
+      case "success":
+        return "bg-green-200";
+      case "error":
+        return "bg-red-200";
+      default:
+        return "bg-white";
+    }
   };
 
   const handleCopy = async () => {
@@ -417,27 +422,25 @@ export function ProviderList({ providers, onEdit, onRemove, showToast, removeToa
           }
 
           return (
-            <div key={index} className="flex items-start justify-between rounded-md border bg-white p-4 transition-all hover:shadow-md animate-slide-in hover:scale-[1.005]">
-              <div className="flex-1 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <a
-                      href={extractDomain(apiBaseUrl)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-md font-semibold text-gray-800 hover:text-blue-600 hover:underline cursor-pointer transition-colors"
-                    >
-                      {providerName}
-                    </a>
-                    <p className="text-xs text-gray-400 font-mono flex items-center gap-1">
-                      {apiBaseUrl}
-                      <ConnectivityTestButton
-                        apiBaseUrl={apiBaseUrl}
-                        showToast={showToast}
-                        removeToast={removeToast}
-                      />
-                    </p>
-                  </div>
+            <div key={index} className="flex flex-col sm:flex-row sm:items-start sm:justify-between rounded-md border bg-white p-4 transition-all hover:shadow-md animate-slide-in hover:scale-[1.005] gap-3">
+              <div className="flex-1 space-y-2 min-w-0">
+                <div className="space-y-0.5">
+                  <a
+                    href={extractDomain(apiBaseUrl)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-md font-semibold text-gray-800 hover:text-blue-600 hover:underline cursor-pointer transition-colors break-words"
+                  >
+                    {providerName}
+                  </a>
+                  <p className="text-xs text-gray-400 font-mono flex items-center gap-1 flex-wrap">
+                    <span className="break-all">{apiBaseUrl}</span>
+                    <ConnectivityTestButton
+                      apiBaseUrl={apiBaseUrl}
+                      showToast={showToast}
+                      removeToast={removeToast}
+                    />
+                  </p>
                 </div>
 
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -456,7 +459,7 @@ export function ProviderList({ providers, onEdit, onRemove, showToast, removeToa
                 </div>
               </div>
 
-              <div className="ml-4 flex flex-shrink-0 items-center gap-2 self-start">
+              <div className="flex sm:flex-col gap-2 self-end sm:self-start flex-shrink-0">
                 <Button variant="ghost" size="icon" onClick={() => onEdit(index)} className="transition-all-ease hover:scale-110 h-8 w-8">
                   <Pencil className="h-4 w-4 text-gray-500" />
                 </Button>

@@ -11,6 +11,7 @@ import { useConfig } from "./ConfigProvider";
 import type { ModelGroup, Provider } from "@/types";
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
 import { generateModelOptions } from "@/lib/modelOptions";
+import { getRequestStatus, getStatusBadgeClasses } from "@/lib/requestStatus";
 import {
   Dialog,
   DialogContent,
@@ -80,7 +81,30 @@ export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelG
   };
 
   // Generate model options from providers using shared utility function
-  const modelOptions = generateModelOptions(providers, requestStats);
+  const allModelOptions = generateModelOptions(providers, requestStats);
+
+  // Get all models that are already used in other model groups
+  const getUsedModelsInOtherGroups = (excludeGroupIndex: number): Set<string> => {
+    const usedModels = new Set<string>();
+    groups.forEach((group, index) => {
+      if (index !== excludeGroupIndex && group.models) {
+        group.models.forEach(model => usedModels.add(model));
+      }
+    });
+    return usedModels;
+  };
+
+  // Filter model options: exclude already selected + exclude models in other groups
+  const getModelOptionsForEditing = () => {
+    const usedInOtherGroups = getUsedModelsInOtherGroups(editingIndex ?? -1);
+    return allModelOptions.filter(opt => {
+      // Exclude if already selected in current group
+      if (editingData?.models.includes(opt.value)) return false;
+      // Exclude if used in other model groups
+      if (usedInOtherGroups.has(opt.value)) return false;
+      return true;
+    });
+  };
 
   // Check if a group name is used in Router config
   const getGroupUsageScenarios = (groupName: string): string[] => {
@@ -264,15 +288,20 @@ export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelG
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
-                        {(group.models || []).map((model) => (
-                          <Badge
-                            key={model}
-                            variant="secondary"
-                            className="text-xs"
-                          >
-                            {model.replace(",", ", ")}
-                          </Badge>
-                        ))}
+                        {(group.models || []).map((modelStr) => {
+                          const [provider, ...modelParts] = modelStr.split(",");
+                          const model = modelParts.join(",");
+                          const status = getRequestStatus(requestStats, provider, model);
+                          return (
+                            <Badge
+                              key={modelStr}
+                              variant="outline"
+                              className={`text-xs ${getStatusBadgeClasses(status)}`}
+                            >
+                              {modelStr.replace(",", ", ")}
+                            </Badge>
+                          );
+                        })}
                         {(!group.models || group.models.length === 0) && (
                           <span className="text-xs text-gray-400">{t("groups.no_models")}</span>
                         )}
@@ -334,9 +363,7 @@ export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelG
               <div className="space-y-2">
                 <Label>{t("groups.models")}</Label>
                 <Combobox
-                  options={modelOptions.filter(
-                    (opt) => !editingData.models.includes(opt.value)
-                  )}
+                  options={getModelOptionsForEditing()}
                   value=""
                   onChange={(value) => {
                     if (value) handleAddModel(value);
@@ -357,21 +384,26 @@ export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelG
                   </p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
-                    {editingData.models.map((model) => (
-                      <Badge
-                        key={model}
-                        variant="outline"
-                        className="flex items-center gap-1 pr-1 py-1"
-                      >
-                        <span className="text-xs">{model.replace(",", ", ")}</span>
-                        <button
-                          onClick={() => handleRemoveModel(model)}
-                          className="ml-0.5 rounded-full p-0.5 hover:bg-gray-200 transition-colors"
+                    {editingData.models.map((modelStr) => {
+                      const [provider, ...modelParts] = modelStr.split(",");
+                      const model = modelParts.join(",");
+                      const status = getRequestStatus(requestStats, provider, model);
+                      return (
+                        <Badge
+                          key={modelStr}
+                          variant="outline"
+                          className={`flex items-center gap-1 pr-1 py-1 ${getStatusBadgeClasses(status)}`}
                         >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
+                          <span className="text-xs">{modelStr.replace(",", ", ")}</span>
+                          <button
+                            onClick={() => handleRemoveModel(modelStr)}
+                            className="ml-0.5 rounded-full p-0.5 hover:bg-gray-200 transition-colors"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      );
+                    })}
                   </div>
                 )}
               </div>

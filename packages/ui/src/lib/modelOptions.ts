@@ -1,5 +1,6 @@
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
 import type { Provider, ModelGroup } from "@/types";
+import { getRequestStatus } from "./requestStatus";
 
 /**
  * Model option with status and stats information
@@ -24,19 +25,6 @@ function getModelStats(
 }
 
 /**
- * Determine model status based on last request
- */
-function getModelStatus(
-  requestStats: RequestStatsItem[] | undefined,
-  providerName: string,
-  modelName: string
-): 'success' | 'error' | 'neutral' {
-  const stats = getModelStats(requestStats, providerName, modelName);
-  if (!stats?.lastRequest) return 'neutral';
-  return stats.lastRequest.error ? 'error' : 'success';
-}
-
-/**
  * Generate model options with status and success count from providers
  *
  * @param providers - Array of provider configurations
@@ -56,7 +44,7 @@ export function generateModelOptions(
     return models.map((model) => {
       const stats = getModelStats(requestStats, providerName, model || "Unknown Model");
       const successCount = stats?.success || 0;
-      const status = getModelStatus(requestStats, providerName, model || "Unknown Model");
+      const status = getRequestStatus(requestStats, providerName, model || "Unknown Model");
 
       return {
         value: `${providerName},${model || "Unknown Model"}`,
@@ -65,7 +53,14 @@ export function generateModelOptions(
         status,
       };
     });
-  }).sort((a, b) => b.successCount - a.successCount);
+  }).sort((a, b) => {
+    // Sort by status first: success > neutral > error
+    const statusOrder = { success: 0, neutral: 1, error: 2 };
+    const statusDiff = statusOrder[a.status] - statusOrder[b.status];
+    if (statusDiff !== 0) return statusDiff;
+    // Then by success count (descending)
+    return b.successCount - a.successCount;
+  });
 }
 
 /**
