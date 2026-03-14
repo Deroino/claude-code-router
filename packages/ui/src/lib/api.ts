@@ -270,17 +270,23 @@ class ApiClient {
   }
 
   // Test a specific provider+model
-  async testModel(provider: string, model: string, message?: string): Promise<{ success: boolean; status?: number; response?: string; error?: string; rawResponse?: any; debug?: any }> {
+  async testModel(provider: string, model: string, message?: string, keyIndex?: number): Promise<{ success: boolean; status?: number; response?: string; error?: string; rawResponse?: any; debug?: any }> {
     return this.post<{ success: boolean; status?: number; response?: string; error?: string; rawResponse?: any; debug?: any }>("/model-test", {
       provider,
       model,
       message,
+      ...(keyIndex !== undefined && { keyIndex }),
     });
   }
 
   // Test provider URL connectivity
   async testConnectivity(url: string): Promise<{ success: boolean; latency_ms: number; status?: number; error?: string }> {
     return this.post<{ success: boolean; latency_ms: number; status?: number; error?: string }>("/connectivity-test", { url });
+  }
+
+  // Fetch models from provider (server-side proxy to avoid CORS)
+  async fetchModels(api_base_url: string, api_key?: string): Promise<{ success: boolean; type?: string; data?: any; error?: string }> {
+    return this.post<{ success: boolean; type?: string; data?: any; error?: string }>("/fetch-models", { api_base_url, api_key });
   }
 
   // Get log files list
@@ -396,7 +402,7 @@ class ApiClient {
 
   // Start a batch test task on the backend
   async startBatchTest(
-    tests: Array<{ provider: string; model: string }>,
+    tests: Array<{ provider: string; model: string; keyIndex?: number }>,
     concurrency: number = 20
   ): Promise<{ success: boolean; total?: number; concurrency?: number; error?: string }> {
     return this.post<{ success: boolean; total?: number; concurrency?: number; error?: string }>(

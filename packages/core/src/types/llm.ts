@@ -197,10 +197,26 @@ export interface ConversionOptions {
   sourceProvider: "openai" | "anthropic";
 }
 
+// Structured API key entry with optional model filter
+export interface ApiKeyEntry {
+  key: string;
+  models?: string[];  // If omitted, supports all provider models
+  group?: string;     // NewAPI group name (UI metadata, resolved to models on assignment)
+}
+
+// API key configuration: single string, array of strings, or mixed array with objects
+export type ApiKeyConfig = string | (string | ApiKeyEntry)[];
+
+// Result of API key resolution with rotation/filtering
+export interface ResolvedApiKey {
+  key: string;
+  keyIndex: number;  // Position in the original array (0 for single string)
+}
+
 export interface LLMProvider {
   name: string;
   baseUrl: string;
-  apiKey: string | string[];
+  apiKey: ApiKeyConfig;
   models: string[];
   transformer?: {
     [key: string]: {
@@ -228,7 +244,7 @@ export interface RequestRouteInfo {
 export interface ConfigProvider {
   name: string;
   api_base_url: string;
-  api_key: string | string[];
+  api_key: ApiKeyConfig;
   models: string[];
   transformer: {
     use?: string[] | Array<any>[];

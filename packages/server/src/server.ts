@@ -1,5 +1,5 @@
 // @ts-ignore - requestStatsService is exported but not in type definitions
-import Server, { calculateTokenCount, TokenizerService, requestStatsService, ConfigService } from "@musistudio/llms";
+import Server, { calculateTokenCount, TokenizerService, requestStatsService, ConfigService, parseStatsKey } from "@musistudio/llms";
 import { readConfigFile, writeConfigFile, backupConfigFile } from "./utils";
 import { CONFIG_FILE } from "@CCR/shared";
 import { join } from "path";
@@ -344,11 +344,13 @@ export const createServer = async (config: any): Promise<any> => {
     provider: string,
     model: string,
     message?: string,
-    externalSignal?: AbortSignal
-  ): Promise<{ success: boolean; status?: number; response?: string; error?: string; rawResponse?: any; debug?: any }> {
+    externalSignal?: AbortSignal,
+    specificKeyIndex?: number
+  ): Promise<{ success: boolean; status?: number; response?: string; error?: string; rawResponse?: any; debug?: any; keyIndex?: number }> {
     let providerData: any;
     let processedRequest: any;
     let requestConfig: any = {};
+    let selectedKeyIndex: number = 0;
 
     const serverInstance = (app as any)._server;
     const providerService = serverInstance?.providerService;
@@ -404,10 +406,29 @@ export const createServer = async (config: any): Promise<any> => {
         }
       }
 
-      // Apply auth method from transformers
+      // Apply auth method from transformers (use resolvedProvider for transformer compat)
+      // Resolve API key - use specific key if provided, otherwise round-robin
+      let selectedApiKey: string;
+      if (specificKeyIndex !== undefined && Array.isArray(providerData.apiKey)) {
+        // Direct key selection by index
+        const entry = providerData.apiKey[specificKeyIndex];
+        selectedApiKey = typeof entry === 'string' ? entry : (entry?.key || '');
+        selectedKeyIndex = specificKeyIndex;
+      } else {
+        const resolvedKey = providerService.getApiKey(
+          providerData.name,
+          providerData.apiKey,
+          model,
+          providerData.models
+        );
+        selectedApiKey = resolvedKey.key;
+        selectedKeyIndex = resolvedKey.keyIndex;
+      }
+      const resolvedProviderData = { ...providerData, apiKey: selectedApiKey };
+
       for (const transformer of providerData.transformer?.use || []) {
         if (transformer && typeof transformer.auth === "function") {
-          const authResult = await transformer.auth(processedRequest, providerData, {});
+          const authResult = await transformer.auth(processedRequest, resolvedProviderData, {});
           if (authResult?.body) {
             const { body, config } = processTransformerResult(authResult, processedRequest, requestConfig);
             processedRequest = body;
@@ -420,7 +441,7 @@ export const createServer = async (config: any): Promise<any> => {
 
       for (const transformer of providerData.transformer?.[model]?.use || []) {
         if (transformer && typeof transformer.auth === "function") {
-          const authResult = await transformer.auth(processedRequest, providerData, {});
+          const authResult = await transformer.auth(processedRequest, resolvedProviderData, {});
           if (authResult?.body) {
             const { body, config } = processTransformerResult(authResult, processedRequest, requestConfig);
             processedRequest = body;
@@ -456,11 +477,7 @@ export const createServer = async (config: any): Promise<any> => {
         }
       }
 
-      // Get API key with rotation support
-      const selectedApiKey = typeof providerData.apiKey === 'string'
-        ? providerData.apiKey
-        : providerService.getApiKey(providerData.name, providerData.apiKey);
-
+      // Build request headers with the already-resolved API key
       const requestHeaders = buildRequestHeaders(selectedApiKey, requestConfig.headers || {});
 
       // Create AbortController for timeout, link with external signal
@@ -502,6 +519,7 @@ export const createServer = async (config: any): Promise<any> => {
         if (!trimmedResponse) {
           const errorMessage = `Model returned empty response. Raw response: ${JSON.stringify(data)}`;
           requestStatsService.recordFailure(provider, model, processedRequest, errorMessage, 200);
+          requestStatsService.recordKeyFailure(provider, selectedKeyIndex, model, processedRequest, errorMessage, 200);
           return {
             success: false,
             error: "Model returned empty response",
@@ -515,7 +533,8 @@ export const createServer = async (config: any): Promise<any> => {
         }
 
         requestStatsService.recordSuccess(provider, model, processedRequest, data);
-        return { success: true, status: response.status, response: responseText };
+        requestStatsService.recordKeySuccess(provider, selectedKeyIndex, model, processedRequest, data);
+        return { success: true, status: response.status, response: responseText, keyIndex: selectedKeyIndex };
       } else {
         const errorText = await response.text();
         let errorData: any = errorText;
@@ -527,6 +546,7 @@ export const createServer = async (config: any): Promise<any> => {
         }
 
         requestStatsService.recordFailure(provider, model, processedRequest, errorText, response.status);
+        requestStatsService.recordKeyFailure(provider, selectedKeyIndex, model, processedRequest, errorText, response.status);
         return { success: false, status: response.status, error: errorData };
       }
     } catch (error: any) {
@@ -536,6 +556,7 @@ export const createServer = async (config: any): Promise<any> => {
           return { success: false, status: 499, error: "Cancelled" };
         }
         requestStatsService.recordFailure(provider, model, processedRequest || {}, "Request timeout (20 seconds)", 504);
+        requestStatsService.recordKeyFailure(provider, selectedKeyIndex, model, processedRequest || {}, "Request timeout (20 seconds)", 504);
         return { success: false, status: 504, error: "Request timeout (20 seconds)" };
       }
 
@@ -546,6 +567,7 @@ export const createServer = async (config: any): Promise<any> => {
       errorDetail += `\nOriginal error: ${error.message || 'Unknown error'}`;
 
       requestStatsService.recordFailure(provider, model, processedRequest || {}, errorDetail, 500);
+      requestStatsService.recordKeyFailure(provider, selectedKeyIndex, model, processedRequest || {}, errorDetail, 500);
       return { success: false, status: 500, error: errorDetail };
     }
   }
@@ -555,14 +577,14 @@ export const createServer = async (config: any): Promise<any> => {
 
   // Add endpoint to test a specific provider+model (delegates to executeModelTest)
   app.post("/api/model-test", async (req: any, reply: any) => {
-    const { provider, model, message } = req.body;
+    const { provider, model, message, keyIndex } = req.body;
 
     if (!provider || !model) {
       reply.status(400).send({ success: false, error: "provider and model are required" });
       return;
     }
 
-    const result = await executeModelTest(provider, model, message);
+    const result = await executeModelTest(provider, model, message, undefined, keyIndex);
 
     // Always return 200 to avoid triggering frontend auth redirect
     reply.status(200).send(result);
@@ -640,6 +662,103 @@ export const createServer = async (config: any): Promise<any> => {
         latency_ms: latency,
         error: error.message || "Connection failed",
       });
+    }
+  });
+
+  // Proxy endpoint for fetching models from provider's /v1/models endpoint
+  // This avoids CORS issues when the UI fetches directly from external providers
+  app.post("/api/fetch-models", async (req: any, reply: any) => {
+    const { api_base_url, api_key } = req.body as { api_base_url?: string; api_key?: string };
+
+    if (!api_base_url) {
+      reply.status(400).send({ success: false, error: "api_base_url is required" });
+      return;
+    }
+
+    // Extract base URL (strip /v1/... suffix)
+    let baseUrl = api_base_url.replace(/\/$/, '');
+    baseUrl = baseUrl.replace(/\/v1\/?.*$/, '');
+
+    // Get proxy config
+    const serverInst = (app as any)._server;
+    const configService2 = serverInst?.configService;
+    const httpsProxy = configService2?.getHttpsProxy();
+
+    // Step 1: Try NewAPI detection via /api/pricing (no auth, 3s timeout)
+    let newApiData: any = null;
+    try {
+      const pricingController = new AbortController();
+      const pricingTimeout = setTimeout(() => pricingController.abort(), 3000);
+
+      const fetchOptions: RequestInit = {
+        method: 'GET',
+        signal: pricingController.signal,
+      };
+      if (httpsProxy) {
+        (fetchOptions as any).dispatcher = new ProxyAgent(httpsProxy);
+      }
+
+      const pricingResponse = await fetch(`${baseUrl}/api/pricing`, fetchOptions);
+      clearTimeout(pricingTimeout);
+
+      if (pricingResponse.ok) {
+        const data = await pricingResponse.json();
+        if (data.success === true && data.group_ratio && Array.isArray(data.data)) {
+          newApiData = data;
+        }
+      }
+    } catch {
+      // Not NewAPI or unreachable, continue to /v1/models
+    }
+
+    if (newApiData) {
+      reply.status(200).send({ success: true, type: 'newapi', data: newApiData });
+      return;
+    }
+
+    // Step 2: Standard /v1/models fetch
+    if (!api_key) {
+      reply.status(400).send({ success: false, error: "api_key is required for /v1/models" });
+      return;
+    }
+
+    try {
+      const modelsController = new AbortController();
+      const modelsTimeout = setTimeout(() => modelsController.abort(), 10000);
+
+      const fetchOptions: RequestInit = {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${api_key}`,
+          'Content-Type': 'application/json',
+        },
+        signal: modelsController.signal,
+      };
+      if (httpsProxy) {
+        (fetchOptions as any).dispatcher = new ProxyAgent(httpsProxy);
+      }
+
+      const response = await fetch(`${baseUrl}/v1/models`, fetchOptions);
+      clearTimeout(modelsTimeout);
+
+      if (!response.ok) {
+        let errorDetail = response.statusText;
+        try {
+          const errorBody = await response.text();
+          if (errorBody) errorDetail = `${response.status} - ${errorBody}`;
+        } catch {}
+        reply.status(200).send({ success: false, error: `HTTP ${response.status}: ${errorDetail}` });
+        return;
+      }
+
+      const data = await response.json();
+      reply.status(200).send({ success: true, type: 'models', data });
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        reply.status(200).send({ success: false, error: 'Connection timeout (10 seconds)' });
+        return;
+      }
+      reply.status(200).send({ success: false, error: error.message || 'Failed to fetch models' });
     }
   });
 
@@ -1313,12 +1432,14 @@ export const createServer = async (config: any): Promise<any> => {
     try {
       // requestStatsService is imported at the top level
       const allStats = requestStatsService.getAllStats() as Map<string, any>;
-      const statsArray: Array<{ key: string; provider: string; model: string; success: number; fail: number; lastRequest?: any }> = [];
+      const statsArray: Array<{ key: string; provider: string; model: string; keyIndex?: number; success: number; fail: number; lastRequest?: any }> = [];
       allStats.forEach((value: any, key: string) => {
+        const parsed = parseStatsKey(key);
         statsArray.push({
           key,
-          provider: key.split(':')[0],
-          model: key.split(':')[1],
+          provider: parsed.provider,
+          model: parsed.model,
+          ...(parsed.keyIndex !== undefined ? { keyIndex: parsed.keyIndex } : {}),
           ...value
         });
       });
@@ -1370,12 +1491,14 @@ export const createServer = async (config: any): Promise<any> => {
 
     // Send initial stats
     const allStats = requestStatsService.getAllStats() as Map<string, any>;
-    const initialStats: Array<{ key: string; provider: string; model: string; success: number; fail: number; lastRequest?: any }> = [];
+    const initialStats: Array<{ key: string; provider: string; model: string; keyIndex?: number; success: number; fail: number; lastRequest?: any }> = [];
     allStats.forEach((value: any, key: string) => {
+      const parsed = parseStatsKey(key);
       initialStats.push({
         key,
-        provider: key.split(':')[0],
-        model: key.split(':')[1],
+        provider: parsed.provider,
+        model: parsed.model,
+        ...(parsed.keyIndex !== undefined ? { keyIndex: parsed.keyIndex } : {}),
         ...value
       });
     });
@@ -1388,12 +1511,14 @@ export const createServer = async (config: any): Promise<any> => {
 
     // Listen for updates
     statsListener = (update: any) => {
+      const parsed = parseStatsKey(update.key);
       const data = {
         type: 'update',
         data: {
           key: update.key,
-          provider: update.key.split(':')[0],
-          model: update.key.split(':')[1],
+          provider: parsed.provider,
+          model: parsed.model,
+          ...(parsed.keyIndex !== undefined ? { keyIndex: parsed.keyIndex } : {}),
           ...update.stats
         },
         timestamp: Date.now()

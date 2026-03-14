@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { X, Trash2, Plus, Eye, EyeOff, Search, XCircle, Play } from "lucide-react";
+import { X, Trash2, Plus, Eye, EyeOff, Search, XCircle, Play, Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Combobox } from "@/components/ui/combobox";
 import { ComboInput } from "@/components/ui/combo-input";
@@ -23,7 +23,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import { getRequestStatus, getStatusBadgeClasses } from "@/lib/requestStatus";
-import type { Provider } from "@/types";
+import type { Provider, ApiKeyEntry } from "@/types";
 import { BatchTestDialog } from "./BatchTestDialog";
 import type { BatchTestResult } from "./BatchTestDialog";
 
@@ -51,7 +51,7 @@ export function Providers({
   onBadgeRef?: (provider: string, model: string, ref: HTMLDivElement | null) => void;
 }) {
   const { t } = useTranslation();
-  const { config, setConfig } = useConfig();
+  const { config, setConfig, flushSave } = useConfig();
   const [editingProviderIndex, setEditingProviderIndex] = useState<number | null>(null);
   const [deletingProviderIndex, setDeletingProviderIndex] = useState<number | null>(null);
   const [hasFetchedModels, setHasFetchedModels] = useState<Record<number, boolean>>({});
@@ -66,6 +66,7 @@ export function Providers({
   const [nameError, setNameError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>("");
   const comboInputRef = useRef<HTMLInputElement>(null);
+  const [modelInput, setModelInput] = useState<string>("");
 
   // Model fetching state
   const [isFetchingModels, setIsFetchingModels] = useState<boolean>(false);
@@ -74,6 +75,11 @@ export function Providers({
   const [showModelSelectDialog, setShowModelSelectDialog] = useState<boolean>(false);
   const [modelFetchError, setModelFetchError] = useState<string | null>(null);
   const [modelSearchTerm, setModelSearchTerm] = useState<string>("");
+
+  // NewAPI group assignment state
+  const [showGroupDialog, setShowGroupDialog] = useState<boolean>(false);
+  const [newApiGroups, setNewApiGroups] = useState<Record<string, string[]>>({}); // group name → model names
+  const [keyGroupAssignments, setKeyGroupAssignments] = useState<Record<number, string>>({}); // keyIndex → group name
 
   // Batch test state
   const [showBatchTestDialog, setShowBatchTestDialog] = useState<boolean>(false);
@@ -256,7 +262,7 @@ export function Providers({
     setNameError(null);
   };
 
-  const handleSaveProvider = () => {
+  const handleSaveProvider = async () => {
     if (!editingProviderData) return;
     
     // Validate name
@@ -280,12 +286,16 @@ export function Providers({
       return;
     }
     
-    // Validate API key - support single string or array
+    // Validate API key - support single string, array of strings, or mixed with ApiKeyEntry
     const apiKeys = Array.isArray(editingProviderData.api_key)
       ? editingProviderData.api_key
       : [editingProviderData.api_key];
 
-    if (!apiKeys.some(k => k && k.trim() !== '')) {
+    if (!apiKeys.some(k => {
+      if (typeof k === 'string') return k && k.trim() !== '';
+      if (k && typeof k === 'object') return k.key && k.key.trim() !== '';
+      return false;
+    })) {
       setApiKeyError(t("providers.api_key_required"));
       return;
     }
@@ -301,7 +311,10 @@ export function Providers({
       } else {
         newProviders[editingProviderIndex] = editingProviderData;
       }
-      setConfig({ ...config, Providers: newProviders });
+      const newConfig = { ...config, Providers: newProviders };
+      setConfig(newConfig);
+      // Immediately flush to server so models are available for testing
+      await flushSave(newConfig);
     }
     // Reset API key visibility for this provider
     if (editingProviderIndex !== null) {
@@ -361,7 +374,7 @@ export function Providers({
     setDeletingProviderIndex(null);
   };
 
-  const handleProviderChange = (_index: number, field: string, value: string | string[]) => {
+  const handleProviderChange = (_index: number, field: string, value: string | string[] | (string | ApiKeyEntry)[]) => {
     if (editingProviderData) {
       const updatedProvider = { ...editingProviderData, [field]: value };
       setEditingProviderData(updatedProvider);
@@ -593,19 +606,33 @@ export function Providers({
   };
 
   const handleAddModel = (_index: number, model: string) => {
-    if (!model.trim() || !editingProviderData) return;
-    
-    const updatedProvider = { ...editingProviderData };
-    
-    // Handle case where provider.models might be null or undefined
-    const models = Array.isArray(updatedProvider.models) ? [...updatedProvider.models] : [];
-    
-    // Check if model already exists
-    if (!models.includes(model.trim())) {
-      models.push(model.trim());
-      updatedProvider.models = models;
-      setEditingProviderData(updatedProvider);
-    }
+    if (!model.trim()) return;
+
+    const trimmed = model.trim();
+
+    // Use functional update to ensure we always work with the latest state
+    setEditingProviderData(prev => {
+      if (!prev) return prev;
+
+      const models = Array.isArray(prev.models) ? [...prev.models] : [];
+
+      // Check if model already exists
+      if (models.includes(trimmed)) {
+        showToast(`Model "${trimmed}" already exists`, "warning");
+        return prev; // Return same reference = no re-render
+      }
+
+      models.push(trimmed);
+      showToast(`Added model: ${trimmed}`, "success", 2000);
+
+      // Scroll model badges into view after next render
+      setTimeout(() => {
+        const el = document.querySelector('[data-model-badges]');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }, 100);
+
+      return { ...prev, models };
+    });
   };
 
     const handleTemplateImport = (value: string) => {
@@ -628,22 +655,22 @@ export function Providers({
   };
 
   const handleRemoveModel = (_providerIndex: number, modelIndex: number) => {
-    if (!editingProviderData) return;
+    setEditingProviderData(prev => {
+      if (!prev) return prev;
 
-    const updatedProvider = { ...editingProviderData };
+      const models = Array.isArray(prev.models) ? [...prev.models] : [];
 
-    // Handle case where provider.models might be null or undefined
-    const models = Array.isArray(updatedProvider.models) ? [...updatedProvider.models] : [];
-
-    // Handle case where modelIndex might be out of bounds
-    if (modelIndex >= 0 && modelIndex < models.length) {
-      models.splice(modelIndex, 1);
-      updatedProvider.models = models;
-      setEditingProviderData(updatedProvider);
-    }
+      if (modelIndex >= 0 && modelIndex < models.length) {
+        models.splice(modelIndex, 1);
+        return { ...prev, models };
+      }
+      return prev;
+    });
   };
 
   // Fetch models from provider's /v1/models endpoint
+  // Uses server-side proxy to avoid CORS issues
+  // First detects if provider is NewAPI (via /api/pricing), then handles accordingly
   const handleFetchModels = async () => {
     if (!editingProviderData) return;
 
@@ -661,75 +688,91 @@ export function Providers({
     setSelectedModels(new Set());
 
     try {
-      // Extract base URL and construct models endpoint
-      // Remove trailing slash
-      let baseUrl = api_base_url.replace(/\/$/, '');
-      // Remove /v1, /v1/messages, /v1/chat/completions, etc. to get the actual base URL
-      baseUrl = baseUrl.replace(/\/v1\/?.*$/, '');
-      // Construct models endpoint
-      const modelsUrl = `${baseUrl}/v1/models`;
-
-      // Get API key (handle array or string)
-      const apiKey = Array.isArray(api_key) ? api_key[0] || '' : api_key;
-
-      // Create timeout signal (5 seconds)
-      const timeoutController = new AbortController();
-      const timeoutId = setTimeout(() => timeoutController.abort(), 5000);
-
-      const response = await fetch(modelsUrl, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        signal: timeoutController.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        // Try to read error response body
-        let errorDetail = response.statusText;
-        try {
-          const errorBody = await response.text();
-          if (errorBody) {
-            errorDetail = `${response.status} - ${errorBody}`;
-          }
-        } catch (e) {
-          // If we can't read the body, just use status
-        }
-        throw new Error(`HTTP ${response.status}: ${errorDetail}`);
+      // Get API key string (handle array, string, or object)
+      let apiKeyStr = '';
+      if (typeof api_key === 'string') {
+        apiKeyStr = api_key;
+      } else if (Array.isArray(api_key) && api_key.length > 0) {
+        const firstKey = api_key[0];
+        apiKeyStr = typeof firstKey === 'string' ? firstKey : (firstKey?.key || '');
       }
 
-      const data = await response.json();
+      // Use server-side proxy to avoid CORS
+      const result = await api.fetchModels(api_base_url, apiKeyStr);
 
-      // Parse response - handle standard OpenAI format
-      if (data.object === 'list' && Array.isArray(data.data)) {
-        const models: ModelData[] = data.data;
-        setFetchedModels(models);
+      if (!result.success) {
+        throw new Error(result.error || "Failed to fetch models");
+      }
 
-        // Mark that models have been fetched for this provider
-        if (editingProviderIndex !== null) {
-          setHasFetchedModels(prev => ({
-            ...prev,
-            [editingProviderIndex]: true
-          }));
+      // Handle NewAPI detection result
+      if (result.type === 'newapi' && result.data) {
+        const pricingData = result.data;
+
+        // Parse group → models mapping
+        const groups: Record<string, string[]> = {};
+        const groupNames = Object.keys(pricingData.group_ratio);
+        groupNames.forEach((g: string) => { groups[g] = []; });
+
+        for (const model of pricingData.data) {
+          if (model.model_name && Array.isArray(model.enable_groups)) {
+            for (const g of model.enable_groups) {
+              if (groups[g]) {
+                groups[g].push(model.model_name);
+              }
+            }
+          }
         }
 
-        // Pre-select models that are already in the provider's model list
-        const existingModels = editingProviderData.models || [];
-        const preSelected = new Set<string>();
-        models.forEach(m => {
-          if (existingModels.includes(m.id)) {
-            preSelected.add(m.id);
-          }
-        });
-        setSelectedModels(preSelected);
+        // Show group dialog for NewAPI - works for both single and multi-key
+        const rawKeys = Array.isArray(api_key) ? api_key : [api_key];
+        if (groupNames.length > 0) {
+          // Initialize key-group assignments from existing config
+          const initialAssignments: Record<number, string> = {};
+          rawKeys.forEach((entry: any, idx: number) => {
+            if (typeof entry !== 'string' && entry?.group) {
+              initialAssignments[idx] = entry.group;
+            } else {
+              initialAssignments[idx] = groupNames[0] || '';
+            }
+          });
 
-        // Open the selection dialog
-        setShowModelSelectDialog(true);
-      } else {
-        throw new Error("Invalid response format from /v1/models");
+          setNewApiGroups(groups);
+          setKeyGroupAssignments(initialAssignments);
+          setShowGroupDialog(true);
+          setIsFetchingModels(false);
+          return;
+        }
+      }
+
+      // Handle standard /v1/models result
+      if (result.type === 'models' && result.data) {
+        const data = result.data;
+
+        // Parse response - handle standard OpenAI format
+        if (data.object === 'list' && Array.isArray(data.data)) {
+          const models: ModelData[] = data.data;
+          setFetchedModels(models);
+
+          if (editingProviderIndex !== null) {
+            setHasFetchedModels(prev => ({
+              ...prev,
+              [editingProviderIndex]: true
+            }));
+          }
+
+          const existingModels = editingProviderData.models || [];
+          const preSelected = new Set<string>();
+          models.forEach(m => {
+            if (existingModels.includes(m.id)) {
+              preSelected.add(m.id);
+            }
+          });
+          setSelectedModels(preSelected);
+
+          setShowModelSelectDialog(true);
+        } else {
+          throw new Error("Invalid response format from /v1/models");
+        }
       }
     } catch (error: any) {
       const errorMsg = error.message || "Failed to fetch models";
@@ -738,6 +781,72 @@ export function Providers({
     } finally {
       setIsFetchingModels(false);
     }
+  };
+
+  // Handle NewAPI group assignment confirmation
+  const handleConfirmGroupAssignment = () => {
+    if (!editingProviderData) return;
+
+    const rawKeys = Array.isArray(editingProviderData.api_key)
+      ? editingProviderData.api_key
+      : [editingProviderData.api_key || ''];
+
+    // Provider models = union of all assigned groups' models
+    const allModels = new Set<string>();
+    Object.values(keyGroupAssignments).forEach(group => {
+      (newApiGroups[group] || []).forEach(m => allModels.add(m));
+    });
+
+    if (rawKeys.length === 1) {
+      // Single key: no per-key model filter needed, just set provider models
+      setEditingProviderData(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          models: Array.from(allModels),
+        };
+      });
+
+      const assignedGroup = keyGroupAssignments[0] || '';
+      showToast(`Selected group "${assignedGroup}", ${allModels.size} models`, "success");
+    } else {
+      // Multi-key: set per-key model filter with group info
+      const newKeys = rawKeys.map((entry, idx) => {
+        const keyStr = typeof entry === 'string' ? entry : (entry?.key || '');
+        const assignedGroup = keyGroupAssignments[idx];
+        if (!assignedGroup) return keyStr;
+
+        const groupModels = newApiGroups[assignedGroup] || [];
+        return {
+          key: keyStr,
+          group: assignedGroup,
+          models: groupModels,
+        };
+      });
+
+      setEditingProviderData(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          api_key: newKeys as any,
+          models: Array.from(allModels),
+        };
+      });
+
+      const groupCount = new Set(Object.values(keyGroupAssignments)).size;
+      showToast(`Assigned ${rawKeys.length} keys to ${groupCount} group(s), ${allModels.size} models total`, "success");
+    }
+
+    setShowGroupDialog(false);
+    setNewApiGroups({});
+    setKeyGroupAssignments({});
+  };
+
+  // Cancel group assignment
+  const handleCancelGroupAssignment = () => {
+    setShowGroupDialog(false);
+    setNewApiGroups({});
+    setKeyGroupAssignments({});
   };
 
   // Handle model selection
@@ -817,7 +926,11 @@ export function Providers({
   const handleRunBatchTests = async (selectedTests: BatchTestResult[]) => {
     if (selectedTests.length === 0) return;
 
-    const tests = selectedTests.map(t => ({ provider: t.provider, model: t.model }));
+    const tests = selectedTests.map(t => ({
+      provider: t.provider,
+      model: t.model,
+      ...(t.keyIndex !== undefined ? { keyIndex: t.keyIndex } : {}),
+    }));
 
     try {
       const result = await api.startBatchTest(tests, batchTestConcurrency);
@@ -862,10 +975,30 @@ export function Providers({
   };
 
   const handleBatchTestAll = async () => {
-    // Collect all models from all providers
-    const allTests: Array<{ provider: string; model: string }> = [];
+    // Collect all tests, expanding per-key when keys have model filters
+    const allTests: Array<{ provider: string; model: string; keyIndex?: number }> = [];
     for (const provider of validProviders) {
-      if (provider.name && provider.models) {
+      if (!provider.name || !provider.models) continue;
+
+      const rawKeys = Array.isArray(provider.api_key) ? provider.api_key : [provider.api_key];
+      const hasPerKeyModels = rawKeys.some(
+        k => typeof k !== 'string' && k?.models && k.models.length > 0
+      );
+
+      if (hasPerKeyModels && rawKeys.length > 1) {
+        // Per-key testing: each key tests only its own models
+        rawKeys.forEach((entry, keyIdx) => {
+          const keyModels = typeof entry !== 'string' && entry?.models && entry.models.length > 0
+            ? entry.models
+            : provider.models!; // Keys without filter test all models
+          for (const model of keyModels) {
+            if (provider.models!.includes(model)) {
+              allTests.push({ provider: provider.name, model, keyIndex: keyIdx });
+            }
+          }
+        });
+      } else {
+        // Standard: all models, no specific key
         for (const model of provider.models) {
           allTests.push({ provider: provider.name, model });
         }
@@ -884,21 +1017,23 @@ export function Providers({
         // Merge persisted results with current providers
         const persistedMap = new Map<string, BatchTestResult>();
         for (const r of data.results) {
-          persistedMap.set(`${r.provider}-${r.model}`, r);
+          const pk = r.keyIndex !== undefined ? `${r.provider}-${r.model}-key${r.keyIndex}` : `${r.provider}-${r.model}`;
+          persistedMap.set(pk, r);
         }
         // Use persisted result if exists, otherwise create idle
-        const mergedResults: BatchTestResult[] = allTests.map(({ provider, model }) => {
-          const key = `${provider}-${model}`;
-          return persistedMap.get(key) || { provider, model, status: "idle" as const };
+        const mergedResults: BatchTestResult[] = allTests.map(({ provider, model, keyIndex }) => {
+          const pk = keyIndex !== undefined ? `${provider}-${model}-key${keyIndex}` : `${provider}-${model}`;
+          return persistedMap.get(pk) || { provider, model, ...(keyIndex !== undefined ? { keyIndex } : {}), status: "idle" as const };
         });
         setBatchTestResults(mergedResults);
         if (data.startedAt) setBatchTestStartedAt(data.startedAt);
         if (data.completedAt) setBatchTestCompletedAt(data.completedAt);
       } else {
         // No persisted results, create fresh idle results
-        const freshResults: BatchTestResult[] = allTests.map(({ provider, model }) => ({
+        const freshResults: BatchTestResult[] = allTests.map(({ provider, model, keyIndex }) => ({
           provider,
           model,
+          ...(keyIndex !== undefined ? { keyIndex } : {}),
           status: "idle" as const,
         }));
         setBatchTestResults(freshResults);
@@ -907,9 +1042,10 @@ export function Providers({
       }
     } catch {
       // Failed to load persisted results, create fresh idle results
-      const freshResults: BatchTestResult[] = allTests.map(({ provider, model }) => ({
+      const freshResults: BatchTestResult[] = allTests.map(({ provider, model, keyIndex }) => ({
         provider,
         model,
+        ...(keyIndex !== undefined ? { keyIndex } : {}),
         status: "idle" as const,
       }));
       setBatchTestResults(freshResults);
@@ -1058,63 +1194,167 @@ export function Providers({
                 <Label htmlFor="api_key">{t("providers.api_key")}</Label>
                 <div className="space-y-2">
                   {(() => {
-                    const apiKeys = Array.isArray(editingProvider.api_key)
+                    // Normalize api_key to array of entries
+                    const rawKeys = Array.isArray(editingProvider.api_key)
                       ? editingProvider.api_key
                       : [editingProvider.api_key || ''];
 
-                    return apiKeys.map((key, keyIndex) => (
-                      <div key={keyIndex} className="relative">
-                        <Input
-                          id={`api_key_${keyIndex}`}
-                          type={showApiKey[`${editingProviderIndex}_${keyIndex}`] ? "text" : "password"}
-                          value={key || ''}
-                          onChange={(e) => {
-                            const newKeys = [...apiKeys];
-                            newKeys[keyIndex] = e.target.value;
-                            // If only one key and it's the same as the original, keep as string
-                            if (newKeys.length === 1 && !Array.isArray(editingProvider.api_key)) {
-                              handleProviderChange(editingProviderIndex, 'api_key', e.target.value);
-                            } else {
-                              handleProviderChange(editingProviderIndex, 'api_key', newKeys);
-                            }
-                          }}
-                          className={apiKeyError ? "border-red-500" : ""}
-                        />
-                        <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-1">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => {
-                              const index = `${editingProviderIndex}_${keyIndex}`;
-                              setShowApiKey(prev => ({
-                                ...prev,
-                                [index]: !prev[index]
-                              }));
+                    // Helper to extract key string from string or ApiKeyEntry
+                    const getKeyString = (entry: string | ApiKeyEntry): string =>
+                      typeof entry === 'string' ? entry : (entry?.key || '');
+
+                    // Helper to get models filter from entry (null = no filter)
+                    const getKeyModels = (entry: string | ApiKeyEntry): string[] | null =>
+                      typeof entry === 'string' ? null : (entry?.models && entry.models.length > 0 ? entry.models : null);
+
+                    // Helper to check if model filter is active for an entry
+                    const hasModelFilter = (entry: string | ApiKeyEntry): boolean =>
+                      typeof entry !== 'string' && !!entry?.models && entry.models.length > 0;
+
+                    return rawKeys.map((entry, keyIndex) => (
+                      <div key={keyIndex} className="space-y-1">
+                        <div className="relative">
+                          <Input
+                            id={`api_key_${keyIndex}`}
+                            type={showApiKey[`${editingProviderIndex}_${keyIndex}`] ? "text" : "password"}
+                            value={getKeyString(entry)}
+                            onChange={(e) => {
+                              const newKeys = [...rawKeys];
+                              const currentModels = getKeyModels(entry);
+                              // Preserve model filter if it exists
+                              if (currentModels) {
+                                newKeys[keyIndex] = { key: e.target.value, models: currentModels };
+                              } else {
+                                newKeys[keyIndex] = e.target.value;
+                              }
+                              if (newKeys.length === 1 && !Array.isArray(editingProvider.api_key) && typeof newKeys[0] === 'string') {
+                                handleProviderChange(editingProviderIndex, 'api_key', e.target.value);
+                              } else {
+                                handleProviderChange(editingProviderIndex, 'api_key', newKeys);
+                              }
                             }}
-                          >
-                            {showApiKey[`${editingProviderIndex}_${keyIndex}`] ? (
-                              <EyeOff className="h-4 w-4" />
-                            ) : (
-                              <Eye className="h-4 w-4" />
-                            )}
-                          </Button>
-                          {apiKeys.length > 1 && (
+                            className={apiKeyError ? "border-red-500" : ""}
+                          />
+                          <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-1">
                             <Button
                               type="button"
                               variant="ghost"
                               size="icon"
                               className="h-8 w-8"
                               onClick={() => {
-                                const newKeys = apiKeys.filter((_, i) => i !== keyIndex);
-                                handleProviderChange(editingProviderIndex, 'api_key', newKeys.length === 1 ? newKeys[0] : newKeys);
+                                const index = `${editingProviderIndex}_${keyIndex}`;
+                                setShowApiKey(prev => ({
+                                  ...prev,
+                                  [index]: !prev[index]
+                                }));
                               }}
                             >
-                              <Trash2 className="h-4 w-4" />
+                              {showApiKey[`${editingProviderIndex}_${keyIndex}`] ? (
+                                <EyeOff className="h-4 w-4" />
+                              ) : (
+                                <Eye className="h-4 w-4" />
+                              )}
                             </Button>
-                          )}
+                            {rawKeys.length > 1 && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={() => {
+                                  const newKeys = rawKeys.filter((_, i) => i !== keyIndex);
+                                  if (newKeys.length === 1 && typeof newKeys[0] === 'string') {
+                                    handleProviderChange(editingProviderIndex, 'api_key', newKeys[0]);
+                                  } else {
+                                    handleProviderChange(editingProviderIndex, 'api_key', newKeys);
+                                  }
+                                }}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
                         </div>
+                        {/* Per-key stats summary */}
+                        {rawKeys.length > 1 && (() => {
+                          const providerName = editingProvider.name || '';
+                          const keyStats = requestStats?.filter(
+                            (s: any) => s.provider === providerName && s.keyIndex === keyIndex
+                          ) || [];
+                          const totalSuccess = keyStats.reduce((sum: number, s: any) => sum + (s.success || 0), 0);
+                          const totalFail = keyStats.reduce((sum: number, s: any) => sum + (s.fail || 0), 0);
+                          if (totalSuccess === 0 && totalFail === 0) return null;
+                          return (
+                            <div className="pl-2 flex items-center gap-2 text-xs text-muted-foreground">
+                              <span className="text-emerald-600 flex items-center gap-0.5">
+                                <Check className="h-3 w-3" /> {totalSuccess}
+                              </span>
+                              <span className="text-rose-600 flex items-center gap-0.5">
+                                <X className="h-3 w-3" /> {totalFail}
+                              </span>
+                            </div>
+                          );
+                        })()}
+                        {/* Model filter section - only show when there are multiple keys */}
+                        {rawKeys.length > 1 && (
+                          <div className="pl-2 space-y-1">
+                            <div className="flex items-center gap-2">
+                              <Checkbox
+                                id={`model_filter_${keyIndex}`}
+                                checked={hasModelFilter(entry)}
+                                onCheckedChange={(checked) => {
+                                  const newKeys = [...rawKeys];
+                                  const keyStr = getKeyString(entry);
+                                  if (checked) {
+                                    // Enable model filter - default to all provider models
+                                    newKeys[keyIndex] = { key: keyStr, models: [...(editingProvider.models || [])] };
+                                  } else {
+                                    // Disable model filter - convert back to plain string
+                                    newKeys[keyIndex] = keyStr;
+                                  }
+                                  handleProviderChange(editingProviderIndex, 'api_key', newKeys);
+                                }}
+                              />
+                              <Label htmlFor={`model_filter_${keyIndex}`} className="text-xs text-muted-foreground cursor-pointer">
+                                {t("providers.model_filter", "Model Filter")}
+                              </Label>
+                            </div>
+                            {hasModelFilter(entry) && (
+                              <div className="flex flex-wrap gap-1 pl-6">
+                                {(editingProvider.models || []).map((model: string) => {
+                                  const keyModels = getKeyModels(entry) || [];
+                                  const isSelected = keyModels.includes(model);
+                                  return (
+                                    <Badge
+                                      key={model}
+                                      variant={isSelected ? "default" : "outline"}
+                                      className="cursor-pointer text-xs"
+                                      onClick={() => {
+                                        const newKeys = [...rawKeys];
+                                        const keyStr = getKeyString(entry);
+                                        const currentModels = [...(getKeyModels(entry) || [])];
+                                        if (isSelected) {
+                                          // Remove model (but keep at least one)
+                                          const filtered = currentModels.filter(m => m !== model);
+                                          if (filtered.length > 0) {
+                                            newKeys[keyIndex] = { key: keyStr, models: filtered };
+                                          }
+                                        } else {
+                                          // Add model
+                                          currentModels.push(model);
+                                          newKeys[keyIndex] = { key: keyStr, models: currentModels };
+                                        }
+                                        handleProviderChange(editingProviderIndex, 'api_key', newKeys);
+                                      }}
+                                    >
+                                      {model}
+                                    </Badge>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     ));
                   })()}
@@ -1124,10 +1364,10 @@ export function Providers({
                     size="sm"
                     className="w-full"
                     onClick={() => {
-                      const apiKeys = Array.isArray(editingProvider.api_key)
+                      const rawKeys = Array.isArray(editingProvider.api_key)
                         ? [...editingProvider.api_key, '']
                         : [editingProvider.api_key || '', ''];
-                      handleProviderChange(editingProviderIndex, 'api_key', apiKeys);
+                      handleProviderChange(editingProviderIndex, 'api_key', rawKeys);
                     }}
                   >
                     <Plus className="h-4 w-4 mr-2" />
@@ -1147,13 +1387,12 @@ export function Providers({
                         <ComboInput
                           ref={comboInputRef}
                           options={(editingProvider.models || []).map((model: string) => ({ label: model, value: model }))}
-                          value=""
-                          onChange={() => {
-                            // 只更新输入值，不添加模型
-                          }}
+                          value={modelInput}
+                          onChange={(v) => setModelInput(v)}
                           onEnter={(value) => {
                             if (editingProviderIndex !== null) {
                               handleAddModel(editingProviderIndex, value);
+                              setModelInput("");
                             }
                           }}
                           inputPlaceholder={t("providers.models_placeholder")}
@@ -1162,10 +1401,12 @@ export function Providers({
                         <Input
                           id="models"
                           placeholder={t("providers.models_placeholder")}
+                          value={modelInput}
+                          onChange={(e) => setModelInput(e.target.value)}
                           onKeyDown={(e) => {
-                            if (e.key === 'Enter' && e.currentTarget.value.trim() && editingProviderIndex !== null) {
-                              handleAddModel(editingProviderIndex, e.currentTarget.value);
-                              e.currentTarget.value = '';
+                            if (e.key === 'Enter' && modelInput.trim() && editingProviderIndex !== null) {
+                              handleAddModel(editingProviderIndex, modelInput);
+                              setModelInput("");
                             }
                           }}
                         />
@@ -1175,21 +1416,13 @@ export function Providers({
                       <Button
                         className="flex-1 sm:flex-none"
                         onClick={() => {
-                          if (hasFetchedModels[editingProviderIndex] && comboInputRef.current) {
-                            // 使用ComboInput的逻辑
-                            const comboInput = comboInputRef.current as unknown as { getCurrentValue(): string; clearInput(): void };
-                            const currentValue = comboInput.getCurrentValue();
-                            if (currentValue && currentValue.trim() && editingProviderIndex !== null) {
-                              handleAddModel(editingProviderIndex, currentValue.trim());
-                              // 清空ComboInput
-                              comboInput.clearInput();
-                            }
-                          } else {
-                            // 使用普通Input的逻辑
-                            const input = document.getElementById('models') as HTMLInputElement;
-                            if (input && input.value.trim() && editingProviderIndex !== null) {
-                              handleAddModel(editingProviderIndex, input.value);
-                              input.value = '';
+                          if (modelInput.trim() && editingProviderIndex !== null) {
+                            handleAddModel(editingProviderIndex, modelInput);
+                            setModelInput("");
+                            // Also clear ComboInput internal state if needed
+                            if (hasFetchedModels[editingProviderIndex] && comboInputRef.current) {
+                              const comboInput = comboInputRef.current as unknown as { clearInput?: () => void };
+                              comboInput.clearInput?.();
                             }
                           }
                         }}
@@ -1214,7 +1447,7 @@ export function Providers({
                       </TooltipProvider>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2 pt-2">
+                  <div className="flex flex-wrap gap-2 pt-2" data-model-badges>
                     {(editingProvider.models || []).map((model: string, modelIndex: number) => {
                       const status = getRequestStatus(requestStats, editingProvider.name || '', model);
                       return (
@@ -1570,6 +1803,105 @@ export function Providers({
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeletingProviderIndex(null)}>{t("providers.cancel")}</Button>
             <Button variant="destructive" onClick={() => deletingProviderIndex !== null && handleRemoveProvider(deletingProviderIndex)}>{t("providers.delete")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* NewAPI Group Assignment Dialog */}
+      <Dialog open={showGroupDialog} onOpenChange={handleCancelGroupAssignment}>
+        <DialogContent className="max-h-[80vh] flex flex-col sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{t('group_assignment.title')}</DialogTitle>
+            <DialogDescription>
+              {t('group_assignment.description', { count: Object.keys(newApiGroups).length })}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-grow overflow-y-auto space-y-4 py-2">
+            {editingProviderData && (() => {
+              const rawKeys = Array.isArray(editingProviderData.api_key)
+                ? editingProviderData.api_key
+                : [editingProviderData.api_key || ''];
+              const groupNames = Object.keys(newApiGroups);
+
+              // Helper to mask API key for display
+              const maskKey = (entry: string | ApiKeyEntry): string => {
+                const k = typeof entry === 'string' ? entry : (entry?.key || '');
+                if (k.length <= 10) return '****';
+                return `${k.substring(0, 6)}...${k.substring(k.length - 4)}`;
+              };
+
+              return rawKeys.map((entry, keyIndex) => {
+                const assignedGroup = keyGroupAssignments[keyIndex] || '';
+                const groupModels = assignedGroup ? (newApiGroups[assignedGroup] || []) : [];
+
+                return (
+                  <div key={keyIndex} className="border rounded-md p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-sm">
+                        {t('group_assignment.key_label', { index: keyIndex + 1 })}
+                        <span className="ml-2 text-xs text-muted-foreground font-mono">
+                          ({maskKey(entry)})
+                        </span>
+                      </span>
+                    </div>
+                    <select
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      value={assignedGroup}
+                      onChange={(e) => {
+                        setKeyGroupAssignments(prev => ({
+                          ...prev,
+                          [keyIndex]: e.target.value
+                        }));
+                      }}
+                    >
+                      <option value="">{t('group_assignment.no_group')}</option>
+                      {groupNames.map(g => (
+                        <option key={g} value={g}>
+                          {g} ({t('group_assignment.models_in_group', { count: (newApiGroups[g] || []).length })})
+                        </option>
+                      ))}
+                    </select>
+                    {assignedGroup && groupModels.length > 0 && (
+                      <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
+                        {groupModels.slice(0, 15).map(m => (
+                          <Badge key={m} variant="outline" className="text-xs">
+                            {m}
+                          </Badge>
+                        ))}
+                        {groupModels.length > 15 && (
+                          <Badge variant="secondary" className="text-xs">
+                            +{groupModels.length - 15} more
+                          </Badge>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              });
+            })()}
+
+            {/* Summary */}
+            <div className="border-t pt-3">
+              <p className="text-sm text-muted-foreground">
+                {(() => {
+                  const allModels = new Set<string>();
+                  Object.values(keyGroupAssignments).forEach(group => {
+                    (newApiGroups[group] || []).forEach(m => allModels.add(m));
+                  });
+                  return t('group_assignment.provider_models_summary', { count: allModels.size });
+                })()}
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={handleCancelGroupAssignment}>
+              {t('group_assignment.cancel')}
+            </Button>
+            <Button onClick={handleConfirmGroupAssignment}>
+              {t('group_assignment.confirm')}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

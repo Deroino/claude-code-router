@@ -395,7 +395,9 @@
     "connectivity_test": "测试 URL 连通性",
     "connectivity_testing": "正在测试 {{url}} 的连通性...",
     "connectivity_ok": "{{url}} 可达 ({{ms}}ms, HTTP {{status}})",
-    "connectivity_fail": "{{url}} 不可达: {{error}}"
+    "connectivity_fail": "{{url}} 不可达: {{error}}",
+    "per_key_breakdown": "分 Key 统计",
+    "auto_round_robin": "自动"
   },
   "model_monitor": {
     "title": "模型监控",
@@ -452,7 +454,8 @@
     "test_connectivity": "测试可达性",
     "collapse_all": "全部折叠",
     "expand_all": "全部展开",
-    "models": "个模型"
+    "models": "个模型",
+    "key_index": "Key #{{index}}"
   },
   "settings": {
     "no_auth": "无认证（禁用身份验证）",
@@ -481,6 +484,18 @@
     "selected_count": "已选择 {{selected}} / {{total}} 个模型",
     "cancel": "取消",
     "confirm": "确认添加 ({{count}})"
+  },
+  "group_assignment": {
+    "title": "NewAPI 分组分配",
+    "description": "检测到 {{count}} 个分组，为每个 API Key 分配所属分组以设置可用模型。",
+    "key_label": "Key #{{index}}",
+    "select_group": "选择分组",
+    "no_group": "不分组（所有模型）",
+    "models_in_group": "{{count}} 个模型",
+    "provider_models_summary": "供应商模型将更新为共 {{count}} 个模型",
+    "confirm": "确认",
+    "cancel": "取消",
+    "detecting": "检测中..."
   },
   "groups": {
     "title": "模型组",

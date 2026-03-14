@@ -320,9 +320,24 @@ async function sendRequestToProvider(
 ) {
   const url = config.url || new URL(provider.baseUrl);
 
+  // Resolve API key with model-aware rotation and health filtering
+  const resolvedKey = fastify.providerService.getApiKey(
+    provider.name,
+    provider.apiKey,
+    requestBody.model,
+    provider.models
+  );
+  const selectedApiKey = resolvedKey.key;
+  const selectedKeyIndex = resolvedKey.keyIndex;
+
+  // Create a resolved provider copy with single apiKey for transformer compatibility
+  // This ensures transformers (anthropic, gemini, cerebras) that access provider.apiKey
+  // always see a plain string, not an array or object
+  const resolvedProvider = { ...provider, apiKey: selectedApiKey };
+
   // Handle authentication in passthrough mode
   if (bypass && typeof transformer.auth === "function") {
-    const auth = await transformer.auth(requestBody, provider);
+    const auth = await transformer.auth(requestBody, resolvedProvider);
     if (auth.body) {
       requestBody = auth.body;
       let headers = config.headers || {};
@@ -344,12 +359,7 @@ async function sendRequestToProvider(
     }
   }
 
-  // Send HTTP request
-  // Prepare headers - get API key with rotation support
-  const selectedApiKey = typeof provider.apiKey === 'string'
-    ? provider.apiKey
-    : fastify.providerService.getApiKey(provider.name, provider.apiKey);
-
+  // Send HTTP request - build headers with the resolved API key
   const requestHeaders: Record<string, string> = {
     Authorization: `Bearer ${selectedApiKey}`,
     ...(config?.headers || {}),
@@ -383,8 +393,9 @@ async function sendRequestToProvider(
     // Read error text first (body can only be read once)
     const errorText = await response.text();
 
-    // Record failure statistics
+    // Record failure statistics (both aggregate and per-key)
     requestStatsService.recordFailure(provider.name, requestBody.model, requestBody, errorText, response.status);
+    requestStatsService.recordKeyFailure(provider.name, selectedKeyIndex, requestBody.model, requestBody, errorText, response.status);
 
     // Log request completion for monitor panel (failure)
     context.req.log.info({
@@ -547,6 +558,12 @@ async function sendRequestToProvider(
       });
     }
   }
+
+  // Record per-key success (single call regardless of response parsing outcome)
+  requestStatsService.recordKeySuccess(provider.name, selectedKeyIndex, requestBody.model, requestBody, {
+    status: response.status,
+    message: "Per-key success recorded"
+  });
 
   // Log request completion for monitor panel (success)
   context.req.log.info({

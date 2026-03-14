@@ -43,9 +43,6 @@ export const ComboInput = React.forwardRef<HTMLInputElement, ComboInputProps>(({
   const [inputValue, setInputValue] = React.useState(value || "")
   const internalInputRef = React.useRef<HTMLInputElement>(null)
 
-  // Forward ref to the internal input
-  React.useImperativeHandle(ref, () => internalInputRef.current as HTMLInputElement)
-
   React.useEffect(() => {
     setInputValue(value || "")
   }, [value])

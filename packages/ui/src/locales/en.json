@@ -396,7 +396,9 @@
     "connectivity_test": "Test URL connectivity",
     "connectivity_testing": "Testing connectivity to {{url}}...",
     "connectivity_ok": "{{url}} reachable ({{ms}}ms, HTTP {{status}})",
-    "connectivity_fail": "{{url}} unreachable: {{error}}"
+    "connectivity_fail": "{{url}} unreachable: {{error}}",
+    "per_key_breakdown": "Per-Key Breakdown",
+    "auto_round_robin": "Auto"
   },
   "model_monitor": {
     "title": "Model Monitor",
@@ -453,7 +455,8 @@
     "test_connectivity": "Test Connectivity",
     "collapse_all": "Collapse All",
     "expand_all": "Expand All",
-    "models": "models"
+    "models": "models",
+    "key_index": "Key #{{index}}"
   },
   "settings": {
     "no_auth": "No Auth (Disable Authentication)",
@@ -482,6 +485,18 @@
     "selected_count": "{{selected}} / {{total}} models selected",
     "cancel": "Cancel",
     "confirm": "Confirm Add ({{count}})"
+  },
+  "group_assignment": {
+    "title": "NewAPI Group Assignment",
+    "description": "Detected {{count}} groups. Assign each API key to a group to set its available models.",
+    "key_label": "Key #{{index}}",
+    "select_group": "Select group",
+    "no_group": "No group (all models)",
+    "models_in_group": "{{count}} models",
+    "provider_models_summary": "Provider models will be updated to {{count}} models total",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "detecting": "Detecting..."
   },
   "groups": {
     "title": "Model Groups",

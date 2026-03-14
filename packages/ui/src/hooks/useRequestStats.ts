@@ -17,6 +17,7 @@ export interface RequestStatsItem {
   key: string;
   provider: string;
   model: string;
+  keyIndex?: number;  // Present for per-key entries (format: provider:#N:model)
   success: number;
   fail: number;
   lastSuccessRequest?: LastSuccessInfo;

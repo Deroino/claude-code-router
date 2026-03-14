@@ -31,6 +31,7 @@ import { registerApiRoutes } from "./api/routes";
 import { ProviderService } from "./services/provider";
 import { TransformerService } from "./services/transformer";
 import { TokenizerService } from "./services/tokenizer";
+import { requestStatsService } from "./services/requestStats";
 import { router, calculateTokenCount, searchProjectBySession } from "./utils/router";
 import { sessionUsageCache } from "./utils/cache";
 
@@ -96,6 +97,8 @@ class Server {
         this.transformerService,
         this.app.log
       );
+      // Wire up stats service for health-aware API key selection
+      this.providerService.setStatsService(requestStatsService);
     }).catch((error) => {
       this.app.log.error(`Failed to initialize ProviderService: ${error}`);
       throw error;
@@ -205,6 +208,8 @@ class Server {
       transformerService,
       this.app.log
     );
+    // Wire up stats service for health-aware API key selection
+    providerService.setStatsService(requestStatsService);
     const tokenizerService = new TokenizerService(
       configService,
       this.app.log
@@ -320,4 +325,5 @@ export { TokenizerService } from "./services/tokenizer";
 export { pluginManager, tokenSpeedPlugin, getTokenSpeedStats, getGlobalTokenSpeedStats, CCRPlugin, CCRPluginOptions, PluginMetadata } from "./plugins";
 export { SSEParserTransform, SSESerializerTransform, rewriteStream } from "./utils/sse";
 export { requestStatsService } from "./services/requestStats";
+export { parseStatsKey } from "./services/requestStats";
 export type { RequestStats } from "./services/requestStats";

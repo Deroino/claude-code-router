@@ -5,18 +5,39 @@ import {
   ModelRoute,
   RequestRouteInfo,
   ConfigProvider,
+  ApiKeyConfig,
+  ApiKeyEntry,
+  ResolvedApiKey,
 } from "../types/llm";
-import { ConfigService } from "./config"; 
+import { ConfigService } from "./config";
 import { TransformerService } from "./transformer";
+import type { RequestStatsService } from "./requestStats";
+
+// Normalized internal representation of an API key entry
+interface NormalizedKeyEntry {
+  key: string;
+  index: number;
+  models: string[] | null;  // null = supports all provider models
+}
 
 export class ProviderService {
   private providers: Map<string, LLMProvider> = new Map();
   private modelRoutes: Map<string, ModelRoute> = new Map();
-  // Track rotation index for round-robin API key selection
+  // Track rotation index for round-robin API key selection (keyed by providerName:model)
   private apiKeyRotationIndex: Map<string, number> = new Map();
+  // Optional stats service for health-aware key selection
+  private statsService: RequestStatsService | null = null;
 
   constructor(private readonly configService: ConfigService, private readonly transformerService: TransformerService, private readonly logger: any) {
     this.initializeCustomProviders();
+  }
+
+  /**
+   * Set the RequestStatsService for health-aware API key selection.
+   * Separated from constructor to avoid circular dependency and esbuild dual-singleton issues.
+   */
+  setStatsService(statsService: RequestStatsService): void {
+    this.statsService = statsService;
   }
 
   private initializeCustomProviders() {
@@ -45,15 +66,17 @@ export class ProviderService {
   private initializeFromProvidersArray(providersConfig: ConfigProvider[]) {
     providersConfig.forEach((providerConfig: ConfigProvider) => {
       try {
-        // Support array of API keys - validate at least one key exists
-        const keys = Array.isArray(providerConfig.api_key)
-          ? providerConfig.api_key
-          : [providerConfig.api_key];
+        // Support array of API keys (string, object, or mixed) - validate at least one key exists
+        const hasValidKey = Array.isArray(providerConfig.api_key)
+          ? providerConfig.api_key.some(k =>
+              typeof k === 'string' ? !!k : (k && typeof k === 'object' && !!k.key)
+            )
+          : !!providerConfig.api_key;
 
         if (
           !providerConfig.name ||
           !providerConfig.api_base_url ||
-          !keys.some(k => k)
+          !hasValidKey
         ) {
           return;
         }
@@ -249,22 +272,131 @@ export class ProviderService {
   }
 
   /**
-   * Get API key with round-robin rotation
-   * Supports single string or array of keys
+   * Get API key with round-robin rotation, model filtering, and health-aware selection.
+   *
+   * Selection logic:
+   * 1. Normalize all keys to uniform entries
+   * 2. Filter by target model (only keys whose models include the target)
+   * 3. Filter by health status (skip keys with consecutive recent failures)
+   * 4. Round-robin among remaining eligible keys
+   * 5. Fallback: if all unhealthy, use all model-eligible keys
    */
-  getApiKey(providerName: string, apiKey: string | string[]): string {
+  getApiKey(providerName: string, apiKey: ApiKeyConfig, targetModel?: string, providerModels?: string[]): ResolvedApiKey {
+    // Single string key - no rotation needed
     if (typeof apiKey === 'string') {
-      return apiKey;
+      return { key: apiKey, keyIndex: 0 };
     }
 
-    // Get or initialize rotation index
-    let index = this.apiKeyRotationIndex.get(providerName) || 0;
-    const selectedKey = apiKey[index % apiKey.length];
+    // Normalize all entries to uniform format
+    const entries = this.normalizeApiKeys(apiKey, providerModels || []);
+
+    if (entries.length === 0) {
+      // Should not happen with valid config, but safety fallback
+      this.logger.warn(`No valid API keys found for provider ${providerName}`);
+      return { key: '', keyIndex: 0 };
+    }
+
+    // Step 1: Filter by model support
+    let eligible = entries;
+    if (targetModel) {
+      const modelFiltered = entries.filter(
+        e => e.models === null || e.models.includes(targetModel)
+      );
+      if (modelFiltered.length > 0) {
+        eligible = modelFiltered;
+      } else {
+        // No key explicitly supports this model - use all keys as fallback
+        this.logger.warn(
+          `No API key in provider ${providerName} explicitly supports model ${targetModel}, using all keys`
+        );
+      }
+    }
+
+    // Step 2: Filter by health status
+    let healthy = eligible;
+    if (this.statsService && targetModel) {
+      healthy = eligible.filter(e => this.isKeyHealthy(providerName, e.index, targetModel));
+      if (healthy.length === 0) {
+        // All keys unhealthy - fall back to all eligible keys (don't completely block)
+        this.logger.warn(
+          `All API keys for ${providerName}/${targetModel} are unhealthy, using all eligible keys`
+        );
+        healthy = eligible;
+      }
+    }
+
+    // Step 3: Round-robin among healthy eligible keys
+    const rotationKey = `${providerName}:${targetModel || '*'}`;
+    let index = this.apiKeyRotationIndex.get(rotationKey) || 0;
+    const selected = healthy[index % healthy.length];
 
     // Increment index for next request
-    this.apiKeyRotationIndex.set(providerName, index + 1);
+    this.apiKeyRotationIndex.set(rotationKey, index + 1);
 
-    return selectedKey;
+    return { key: selected.key, keyIndex: selected.index };
+  }
+
+  /**
+   * Normalize mixed ApiKeyConfig to uniform NormalizedKeyEntry array.
+   * Handles: string[], (string | ApiKeyEntry)[]
+   */
+  private normalizeApiKeys(apiKey: (string | ApiKeyEntry)[], providerModels: string[]): NormalizedKeyEntry[] {
+    return apiKey
+      .map((entry, idx): NormalizedKeyEntry | null => {
+        if (typeof entry === 'string') {
+          if (!entry) return null;
+          return { key: entry, index: idx, models: null };
+        }
+        if (entry && typeof entry === 'object' && entry.key) {
+          return {
+            key: entry.key,
+            index: idx,
+            models: entry.models && entry.models.length > 0 ? entry.models : null,
+          };
+        }
+        return null;
+      })
+      .filter((e): e is NormalizedKeyEntry => e !== null);
+  }
+
+  /**
+   * Check if a key is considered healthy for a given model.
+   * A key is unhealthy if:
+   * - It has more than 3 consecutive failures (fail > success means mostly failing)
+   * - Its last failure was within the last 5 minutes
+   * - It has no successful requests at all (fail-only)
+   */
+  private isKeyHealthy(providerName: string, keyIndex: number, model: string): boolean {
+    if (!this.statsService) return true;
+
+    const stats = this.statsService.getKeyStats(providerName, keyIndex, model);
+    if (!stats) return true;  // No stats = never used = healthy
+
+    // If there have been no failures, it's healthy
+    if (stats.fail === 0) return true;
+
+    // If there have been successes recently, check if the last success is more recent than last failure
+    if (stats.lastSuccessRequest && stats.lastFailureRequest) {
+      const lastSuccess = new Date(stats.lastSuccessRequest.timestamp).getTime();
+      const lastFailure = new Date(stats.lastFailureRequest.timestamp).getTime();
+      // Last success is more recent - key has recovered
+      if (lastSuccess > lastFailure) return true;
+    }
+
+    // Check if last failure is within the 5-minute window
+    if (stats.lastFailureRequest) {
+      const lastFailureTime = new Date(stats.lastFailureRequest.timestamp).getTime();
+      const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+      if (lastFailureTime < fiveMinutesAgo) return true;  // Old failure, consider recovered
+    }
+
+    // Key has recent failures and no recent success - check fail threshold
+    // Consider unhealthy if fail count exceeds 3 and there are more failures than successes
+    if (stats.fail >= 3 && stats.fail > stats.success) {
+      return false;
+    }
+
+    return true;
   }
 
   private parseTransformerConfig(transformerConfig: any): any {

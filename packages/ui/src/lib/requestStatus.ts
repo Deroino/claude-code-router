@@ -5,6 +5,7 @@ export type RequestStatus = "success" | "error" | "neutral";
 /**
  * Get the status of a provider:model based on last request timestamps
  * Returns "success" if last success is more recent, "error" if last failure is more recent
+ * Only considers aggregate stats (excludes per-key entries)
  */
 export function getRequestStatus(
   requestStats: RequestStatsItem[] | undefined,
@@ -14,7 +15,7 @@ export function getRequestStatus(
   if (!requestStats) return "neutral";
 
   const stats = requestStats.find(
-    (s) => s.provider === provider && s.model === model
+    (s) => s.provider === provider && s.model === model && s.keyIndex === undefined
   );
   if (!stats) return "neutral";
 
@@ -87,7 +88,7 @@ export function getStatusBadgeClasses(status: RequestStatus): string {
 }
 
 /**
- * Get stats item for a provider:model
+ * Get stats item for a provider:model (aggregate, excludes per-key entries)
  */
 export function getRequestStatsItem(
   requestStats: RequestStatsItem[] | undefined,
@@ -95,6 +96,33 @@ export function getRequestStatsItem(
   model: string
 ): RequestStatsItem | undefined {
   return requestStats?.find(
-    (s) => s.provider === provider && s.model === model
+    (s) => s.provider === provider && s.model === model && s.keyIndex === undefined
+  );
+}
+
+/**
+ * Get per-key stats item for a specific provider:keyIndex:model
+ */
+export function getKeyRequestStatsItem(
+  requestStats: RequestStatsItem[] | undefined,
+  provider: string,
+  keyIndex: number,
+  model: string
+): RequestStatsItem | undefined {
+  return requestStats?.find(
+    (s) => s.provider === provider && s.model === model && s.keyIndex === keyIndex
+  );
+}
+
+/**
+ * Get all per-key stats for a provider (across all models and keys)
+ */
+export function getProviderKeyStats(
+  requestStats: RequestStatsItem[] | undefined,
+  provider: string
+): RequestStatsItem[] {
+  if (!requestStats) return [];
+  return requestStats.filter(
+    (s) => s.provider === provider && s.keyIndex !== undefined
   );
 }

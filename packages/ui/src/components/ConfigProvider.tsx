@@ -8,6 +8,8 @@ interface ConfigContextType {
   setConfig: Dispatch<SetStateAction<Config | null>>;
   error: Error | null;
   isSaving: boolean;
+  /** Immediately save config to server, bypassing debounce */
+  flushSave: (configToSave?: Config) => Promise<void>;
 }
 
 const ConfigContext = createContext<ConfigContextType | undefined>(undefined);
@@ -262,8 +264,33 @@ export function ConfigProvider({ children }: ConfigProviderProps) {
     };
   }, []);
 
+  /**
+   * Immediately save config to server, bypassing the 2-second debounce.
+   * Cancels any pending debounced save to avoid double-write.
+   */
+  const flushSave = async (configToSave?: Config) => {
+    const target = configToSave || config;
+    if (!target) return;
+
+    // Cancel pending debounced save
+    if (pendingSaveRef.current) {
+      clearTimeout(pendingSaveRef.current);
+      pendingSaveRef.current = null;
+    }
+
+    setIsSaving(true);
+    try {
+      await api.updateConfig(target);
+      lastServerConfigRef.current = target;
+    } catch (error) {
+      console.error('Flush save failed:', error);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
-    <ConfigContext.Provider value={{ config, setConfig, error, isSaving }}>
+    <ConfigContext.Provider value={{ config, setConfig, error, isSaving, flushSave }}>
       {children}
     </ConfigContext.Provider>
   );

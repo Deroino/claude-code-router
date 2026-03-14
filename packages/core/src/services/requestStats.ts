@@ -1,6 +1,7 @@
 /**
  * Request Statistics Service
  * Tracks success/failure counts for API requests by provider:model dimension
+ * Also supports per-key tracking with provider:#keyIndex:model dimension
  * Only stores the last request/response to prevent memory bloat
  */
 
@@ -112,6 +113,63 @@ export class RequestStatsService extends EventEmitter {
     this.emit('stats_clear');
   }
 
+  // --- Per-key statistics methods ---
+
+  /**
+   * Record success for a specific API key
+   * Key format: provider:#keyIndex:model
+   */
+  recordKeySuccess(provider: string, keyIndex: number, model: string, request: any, response: any): void {
+    this.ensurePersistence();
+    const key = this.buildKeyStatsKey(provider, keyIndex, model);
+    const existing = this.stats.get(key) || { success: 0, fail: 0 };
+    const lastSuccessRequest: LastSuccessInfo = {
+      timestamp: new Date().toISOString(), request, response
+    };
+    const newStats: RequestStats = {
+      success: existing.success + 1,
+      fail: existing.fail,
+      lastSuccessRequest,
+      lastFailureRequest: existing.lastFailureRequest,
+      lastRequest: lastSuccessRequest
+    };
+    this.stats.set(key, newStats);
+    this.dirty = true;
+    this.emit('stats_update', { key, stats: newStats });
+  }
+
+  /**
+   * Record failure for a specific API key
+   * Key format: provider:#keyIndex:model
+   */
+  recordKeyFailure(provider: string, keyIndex: number, model: string, request: any, error: string, statusCode?: number): void {
+    this.ensurePersistence();
+    const key = this.buildKeyStatsKey(provider, keyIndex, model);
+    const existing = this.stats.get(key) || { success: 0, fail: 0 };
+    const lastFailureRequest: LastFailureInfo = {
+      timestamp: new Date().toISOString(), request, error, statusCode
+    };
+    const newStats: RequestStats = {
+      success: existing.success,
+      fail: existing.fail + 1,
+      lastSuccessRequest: existing.lastSuccessRequest,
+      lastFailureRequest,
+      lastRequest: lastFailureRequest
+    };
+    this.stats.set(key, newStats);
+    this.dirty = true;
+    this.emit('stats_update', { key, stats: newStats });
+  }
+
+  /**
+   * Get per-key stats for a specific API key and model
+   */
+  getKeyStats(provider: string, keyIndex: number, model: string): RequestStats | undefined {
+    this.ensurePersistence();
+    const key = this.buildKeyStatsKey(provider, keyIndex, model);
+    return this.stats.get(key);
+  }
+
   /**
    * Initialize persistence with a file path
    * Call this after construction with the STATS_FILE path
@@ -194,6 +252,31 @@ export class RequestStatsService extends EventEmitter {
   private buildKey(provider: string, model: string): string {
     return `${provider}:${model}`;
   }
+
+  private buildKeyStatsKey(provider: string, keyIndex: number, model: string): string {
+    return `${provider}:#${keyIndex}:${model}`;
+  }
+}
+
+/**
+ * Parse a stats key to extract provider, model, and optional keyIndex.
+ * Handles both legacy "provider:model" and per-key "provider:#N:model" formats.
+ */
+export function parseStatsKey(key: string): { provider: string; model: string; keyIndex?: number } {
+  const parts = key.split(':');
+  if (parts.length >= 3 && parts[1].startsWith('#')) {
+    // Per-key format: provider:#N:model (model may contain colons)
+    return {
+      provider: parts[0],
+      keyIndex: parseInt(parts[1].substring(1), 10),
+      model: parts.slice(2).join(':')
+    };
+  }
+  // Legacy format: provider:model (model may contain colons)
+  return {
+    provider: parts[0],
+    model: parts.slice(1).join(':')
+  };
 }
 
 // Use globalThis to prevent dual-singleton from esbuild bundling

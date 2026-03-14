@@ -2,6 +2,7 @@ import { Pencil, Trash2, Zap, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api } from "@/lib/api";
 import { getRequestStatus, getRequestStatsItem } from "@/lib/requestStatus";
 import type { Provider } from "@/types";
@@ -41,9 +42,10 @@ interface ModelBadgeProps {
   testPrompt?: string;
   isHovered?: boolean;
   onBadgeRef?: (ref: HTMLDivElement | null) => void;
+  apiKeys?: Array<{index: number, display: string}>;
 }
 
-function ModelBadge({ providerName, model, showToast, removeToast, requestStats, testPrompt, isHovered, onBadgeRef }: ModelBadgeProps) {
+function ModelBadge({ providerName, model, showToast, removeToast, requestStats, testPrompt, isHovered, onBadgeRef, apiKeys }: ModelBadgeProps) {
   const [isTesting, setIsTesting] = useState(false);
   const badgeRef = useRef<HTMLDivElement>(null);
 
@@ -97,16 +99,17 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
     }
   };
 
-  const handleTest = async (e: React.MouseEvent) => {
+  const handleTest = async (e: React.MouseEvent, keyIndex?: number) => {
     e.stopPropagation();
     if (isTesting) return;
 
     setIsTesting(true);
-    const textToTest = `${providerName},${model}`;
+    const keyLabel = keyIndex !== undefined ? ` (Key #${keyIndex + 1})` : '';
+    const textToTest = `${providerName},${model}${keyLabel}`;
     const toastId = showToast(`Testing ${textToTest}...`, 'warning', 0);
 
     try {
-      const result = await api.testModel(providerName, model || "", testPrompt);
+      const result = await api.testModel(providerName, model || "", testPrompt, keyIndex);
       removeToast(toastId);
 
       if (result?.success && result?.response) {
@@ -228,6 +231,32 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
               ) : (
                 <div className="text-xs text-gray-500">No successful requests yet</div>
               )}
+              {/* Per-key breakdown */}
+              {apiKeys && apiKeys.length > 1 && (() => {
+                const perKeyStats = requestStats?.filter(
+                  s => s.provider === providerName && s.model === model && s.keyIndex !== undefined
+                ) || [];
+                if (perKeyStats.length === 0) return null;
+                return (
+                  <div className="border-t mt-2 pt-2">
+                    <div className="font-semibold text-xs mb-1">Per-Key Breakdown</div>
+                    <div className="space-y-0.5">
+                      {perKeyStats.map(s => (
+                        <div key={s.keyIndex} className="flex items-center gap-2 text-xs">
+                          <span className="text-muted-foreground">
+                            Key #{(s.keyIndex ?? 0) + 1}
+                            {apiKeys.find(k => k.index === s.keyIndex)?.display
+                              ? ` (${apiKeys.find(k => k.index === s.keyIndex)?.display})`
+                              : ''}
+                          </span>
+                          <span className="text-emerald-600">✓{s.success}</span>
+                          <span className="text-rose-600">✗{s.fail}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </TooltipContent>
         </Tooltip>
@@ -292,13 +321,46 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
       </div>
 
       {/* Test Button - Right Side */}
-      <span
-        className={`p-1 rounded-full hover:bg-gray-100 transition-colors flex-shrink-0 ${isTesting ? 'animate-pulse' : ''}`}
-        title="Test availability"
-        onClick={handleTest}
-      >
-        <Zap className={`h-4 w-4 ${isTesting ? 'text-gray-400' : 'text-amber-500 fill-amber-500'}`} />
-      </span>
+      {apiKeys && apiKeys.length > 1 ? (
+        <Popover>
+          <PopoverTrigger asChild>
+            <span
+              className={`p-1 rounded-full hover:bg-gray-100 transition-colors flex-shrink-0 ${isTesting ? 'animate-pulse' : ''}`}
+              title="Test availability"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <Zap className={`h-4 w-4 ${isTesting ? 'text-gray-400' : 'text-amber-500 fill-amber-500'}`} />
+            </span>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-1" align="end" onClick={(e) => e.stopPropagation()}>
+            <div className="flex flex-col text-xs">
+              <button
+                onClick={(e) => { handleTest(e); }}
+                className="px-3 py-1.5 text-left rounded hover:bg-gray-100 transition-colors whitespace-nowrap"
+              >
+                Auto
+              </button>
+              {apiKeys.map(k => (
+                <button
+                  key={k.index}
+                  onClick={(e) => { handleTest(e, k.index); }}
+                  className="px-3 py-1.5 text-left rounded hover:bg-gray-100 transition-colors whitespace-nowrap"
+                >
+                  Key #{k.index + 1} ({k.display})
+                </button>
+              ))}
+            </div>
+          </PopoverContent>
+        </Popover>
+      ) : (
+        <span
+          className={`p-1 rounded-full hover:bg-gray-100 transition-colors flex-shrink-0 ${isTesting ? 'animate-pulse' : ''}`}
+          title="Test availability"
+          onClick={handleTest}
+        >
+          <Zap className={`h-4 w-4 ${isTesting ? 'text-gray-400' : 'text-amber-500 fill-amber-500'}`} />
+        </span>
+      )}
     </Badge>
   );
 }
@@ -454,6 +516,18 @@ export function ProviderList({ providers, onEdit, onRemove, showToast, removeToa
                       requestStats={requestStats}
                       isHovered={hoveredModel?.provider === providerName && hoveredModel?.model === model}
                       onBadgeRef={(ref) => onBadgeRef?.(providerName, model, ref)}
+                      apiKeys={(() => {
+                        const rawKeys = Array.isArray(provider.api_key) ? provider.api_key : [provider.api_key];
+                        if (rawKeys.length <= 1) return undefined;
+                        return rawKeys.map((entry: any, idx: number) => ({
+                          index: idx,
+                          display: (() => {
+                            const k = typeof entry === 'string' ? entry : (entry?.key || '');
+                            if (k.length <= 10) return '****';
+                            return `${k.substring(0, 4)}...${k.substring(k.length - 4)}`;
+                          })()
+                        }));
+                      })()}
                     />
                   ))}
                 </div>

@@ -16,6 +16,7 @@ import { useTranslation } from "react-i18next";
 export interface BatchTestResult {
   provider: string;
   model: string;
+  keyIndex?: number;
   status: "success" | "error" | "pending" | "testing" | "idle" | "cancelled";
   message?: string;
   response?: string;
@@ -681,7 +682,14 @@ export function BatchTestDialog({
                                   onCheckedChange={() => toggleSelection(result.id)}
                                 />
                               </td>
-                              <td className="p-2 font-mono text-xs whitespace-nowrap">{result.model}</td>
+                              <td className="p-2 font-mono text-xs whitespace-nowrap">
+                                {result.model}
+                                {result.keyIndex !== undefined && (
+                                  <Badge variant="outline" className="ml-1.5 text-[10px] px-1 py-0 font-normal text-muted-foreground">
+                                    Key #{result.keyIndex + 1}
+                                  </Badge>
+                                )}
+                              </td>
                               <td className="p-2 whitespace-nowrap">
                                 {result.status === "success" && (
                                   <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200">

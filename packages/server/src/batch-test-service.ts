@@ -4,6 +4,7 @@ import { BATCH_TEST_RESULTS_FILE, HOME_DIR } from "@CCR/shared";
 export interface BatchTestItem {
   provider: string;
   model: string;
+  keyIndex?: number;
   status: "idle" | "testing" | "success" | "error" | "cancelled";
   message?: string;
   response?: string;
@@ -23,7 +24,8 @@ type ExecuteModelTestFn = (
   provider: string,
   model: string,
   message?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  keyIndex?: number
 ) => Promise<{ success: boolean; status?: number; response?: string; error?: string }>;
 
 /**
@@ -44,7 +46,7 @@ class BatchTestService {
    * Start a batch test task. Returns false if a task is already running.
    */
   start(
-    tests: Array<{ provider: string; model: string }>,
+    tests: Array<{ provider: string; model: string; keyIndex?: number }>,
     concurrency: number,
     executeModelTest: ExecuteModelTestFn,
     testMessage?: string
@@ -64,6 +66,7 @@ class BatchTestService {
     this.results = tests.map(t => ({
       provider: t.provider,
       model: t.model,
+      ...(t.keyIndex !== undefined ? { keyIndex: t.keyIndex } : {}),
       status: "idle" as const,
     }));
 
@@ -143,7 +146,8 @@ class BatchTestService {
             item.provider,
             item.model,
             this.testMessage,
-            this.abortController?.signal
+            this.abortController?.signal,
+            item.keyIndex
           );
 
           // Check if cancelled during execution
@@ -160,6 +164,7 @@ class BatchTestService {
               this.results[index] = {
                 provider: item.provider,
                 model: item.model,
+                ...(item.keyIndex !== undefined ? { keyIndex: item.keyIndex } : {}),
                 status: result.success ? "success" : "error",
                 message: result.error || undefined,
                 response: result.response || undefined,
@@ -170,6 +175,7 @@ class BatchTestService {
             this.results[index] = {
               provider: item.provider,
               model: item.model,
+              ...(item.keyIndex !== undefined ? { keyIndex: item.keyIndex } : {}),
               status: result.success ? "success" : "error",
               message: result.error || undefined,
               response: result.response || undefined,
