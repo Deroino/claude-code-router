@@ -75,6 +75,7 @@ interface ComboboxProps {
   emptyPlaceholder?: string;
   hoveredValue?: string;
   onItemHover?: (value: string | null) => void;
+  modal?: boolean;
 }
 
 export function Combobox({
@@ -86,6 +87,7 @@ export function Combobox({
   emptyPlaceholder = "No options found.",
   hoveredValue,
   onItemHover,
+  modal,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false)
 
@@ -117,7 +119,7 @@ export function Combobox({
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={setOpen} modal={modal}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"

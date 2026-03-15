@@ -1461,6 +1461,7 @@ export function Providers({
                     }}
                     placeholder={t("providers.select_transformer")}
                     emptyPlaceholder={t("providers.no_transformers")}
+                    modal={true}
                   />
                 </div>
                 
@@ -1614,6 +1615,7 @@ export function Providers({
                               }}
                               placeholder={t("providers.select_transformer")}
                               emptyPlaceholder={t("providers.no_transformers")}
+                              modal={true}
                             />
                           </div>
                         </div>

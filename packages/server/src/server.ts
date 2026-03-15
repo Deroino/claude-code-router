@@ -311,9 +311,18 @@ export const createServer = async (config: any): Promise<any> => {
       }
     }
 
-    // Anthropic format: content[0].text
-    if (data.content && data.content[0] && data.content[0].text) {
-      return data.content[0].text;
+    // Anthropic format: find first text block in content array
+    // Extended thinking responses have content[0] as thinking block, text is in a later block
+    if (Array.isArray(data.content)) {
+      const textBlock = data.content.find((block: any) => block.type === 'text' && block.text);
+      if (textBlock) {
+        return textBlock.text;
+      }
+      // Fallback: first block with text property (non-typed responses)
+      const anyTextBlock = data.content.find((block: any) => typeof block.text === 'string' && block.text);
+      if (anyTextBlock) {
+        return anyTextBlock.text;
+      }
     }
 
     // Direct content field
