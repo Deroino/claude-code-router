@@ -285,8 +285,8 @@ class ApiClient {
   }
 
   // Fetch models from provider (server-side proxy to avoid CORS)
-  async fetchModels(api_base_url: string, api_key?: string): Promise<{ success: boolean; type?: string; data?: any; error?: string }> {
-    return this.post<{ success: boolean; type?: string; data?: any; error?: string }>("/fetch-models", { api_base_url, api_key });
+  async fetchModels(api_base_url: string, api_key?: string, forceStandard?: boolean): Promise<{ success: boolean; type?: string; data?: any; error?: string }> {
+    return this.post<{ success: boolean; type?: string; data?: any; error?: string }>("/fetch-models", { api_base_url, api_key, forceStandard });
   }
 
   // Get log files list

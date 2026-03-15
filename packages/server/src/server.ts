@@ -361,12 +361,16 @@ export const createServer = async (config: any): Promise<any> => {
 
     providerData = providerService.getProvider(provider);
     if (!providerData) {
-      return { success: false, error: `Provider '${provider}' not found` };
+      // Reload config and retry once
+      providerService.reload();
+      providerData = providerService.getProvider(provider);
+      if (!providerData) {
+        return { success: false, error: `Provider '${provider}' not found` };
+      }
     }
 
-    if (!providerData.models.includes(model)) {
-      return { success: false, error: `Model '${model}' not found in provider '${provider}'` };
-    }
+    // Model name validation removed: if the model name is wrong,
+    // the upstream API will return its own error message.
 
     try {
       // Construct test request
@@ -668,7 +672,7 @@ export const createServer = async (config: any): Promise<any> => {
   // Proxy endpoint for fetching models from provider's /v1/models endpoint
   // This avoids CORS issues when the UI fetches directly from external providers
   app.post("/api/fetch-models", async (req: any, reply: any) => {
-    const { api_base_url, api_key } = req.body as { api_base_url?: string; api_key?: string };
+    const { api_base_url, api_key, forceStandard } = req.body as { api_base_url?: string; api_key?: string; forceStandard?: boolean };
 
     if (!api_base_url) {
       reply.status(400).send({ success: false, error: "api_base_url is required" });
@@ -686,6 +690,7 @@ export const createServer = async (config: any): Promise<any> => {
 
     // Step 1: Try NewAPI detection via /api/pricing (no auth, 3s timeout)
     let newApiData: any = null;
+    if (!forceStandard) {
     try {
       const pricingController = new AbortController();
       const pricingTimeout = setTimeout(() => pricingController.abort(), 3000);
@@ -714,6 +719,7 @@ export const createServer = async (config: any): Promise<any> => {
     if (newApiData) {
       reply.status(200).send({ success: true, type: 'newapi', data: newApiData });
       return;
+    }
     }
 
     // Step 2: Standard /v1/models fetch

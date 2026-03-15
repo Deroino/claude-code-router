@@ -717,9 +717,13 @@ function App() {
 
       <main className="flex flex-col lg:flex-row h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4rem)] gap-2 md:gap-4 p-2 md:p-4 overflow-hidden">
         {/* Mobile: Stack panels vertically, Desktop: Horizontal layout */}
-        {/* Left Column: Providers */}
+        {/* Left Column: Providers - full width when no other panel is active */}
         {showProviders && (
-          <div className="flex-1 min-w-0 min-h-0 animate-slide-in lg:flex-initial lg:w-[480px] lg:min-w-[400px] lg:max-w-[600px]">
+          <div className={`flex-1 min-w-0 min-h-0 animate-slide-in ${
+            (showRouter || showTransformers || showModelGroups || showModelMonitor)
+              ? 'lg:flex-initial lg:w-[480px] lg:min-w-[400px] lg:max-w-[600px]'
+              : ''
+          }`}>
             <Providers
               showToast={showToast}
               updateToast={updateToast}

@@ -62,13 +62,58 @@ class BatchTestService {
     this.testMessage = testMessage;
     this.abortController = new AbortController();
 
-    // Initialize results
-    this.results = tests.map(t => ({
-      provider: t.provider,
-      model: t.model,
-      ...(t.keyIndex !== undefined ? { keyIndex: t.keyIndex } : {}),
-      status: "idle" as const,
-    }));
+    // Load previously persisted results for merging
+    const previousResults = this.loadPersistedResults();
+
+    // Build a set of keys for tests being re-run
+    const rerunKeys = new Set<string>();
+    for (const t of tests) {
+      const key = t.keyIndex !== undefined
+        ? `${t.provider}-${t.model}-key${t.keyIndex}`
+        : `${t.provider}-${t.model}`;
+      rerunKeys.add(key);
+    }
+
+    // Merge: preserve previous results, reset only re-run tests to idle
+    const mergedResults: BatchTestItem[] = [];
+    const addedKeys = new Set<string>();
+
+    // Process previous results first (maintain original order)
+    for (const r of previousResults) {
+      const key = r.keyIndex !== undefined
+        ? `${r.provider}-${r.model}-key${r.keyIndex}`
+        : `${r.provider}-${r.model}`;
+      if (rerunKeys.has(key)) {
+        // Reset to idle for re-testing
+        mergedResults.push({
+          provider: r.provider,
+          model: r.model,
+          ...(r.keyIndex !== undefined ? { keyIndex: r.keyIndex } : {}),
+          status: "idle" as const,
+        });
+      } else {
+        // Keep previous result unchanged
+        mergedResults.push(r);
+      }
+      addedKeys.add(key);
+    }
+
+    // Add any new tests not present in previous results
+    for (const t of tests) {
+      const key = t.keyIndex !== undefined
+        ? `${t.provider}-${t.model}-key${t.keyIndex}`
+        : `${t.provider}-${t.model}`;
+      if (!addedKeys.has(key)) {
+        mergedResults.push({
+          provider: t.provider,
+          model: t.model,
+          ...(t.keyIndex !== undefined ? { keyIndex: t.keyIndex } : {}),
+          status: "idle" as const,
+        });
+      }
+    }
+
+    this.results = mergedResults;
 
     // Persist initial state
     this.persistResults();
@@ -118,6 +163,23 @@ class BatchTestService {
       completedAt: this.completedAt,
       results: this.results,
     };
+  }
+
+  /**
+   * Load previously persisted results from file.
+   */
+  private loadPersistedResults(): BatchTestItem[] {
+    try {
+      if (existsSync(BATCH_TEST_RESULTS_FILE)) {
+        const data = JSON.parse(readFileSync(BATCH_TEST_RESULTS_FILE, "utf-8"));
+        if (data?.results?.length > 0) {
+          return data.results;
+        }
+      }
+    } catch {
+      // Ignore read errors
+    }
+    return [];
   }
 
   /**

@@ -190,6 +190,15 @@ export function BatchTestDialog({
     }
   }, [open, results.length]);
 
+  // Default collapse all providers when dialog opens
+  useEffect(() => {
+    if (open && results.length > 0) {
+      const providers = new Set(results.map(r => r.provider || "Unknown"));
+      setCollapsedProviders(providers);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
   const filteredResults = results.map((r, index) => ({...r, id: `${r.provider}-${r.model}-${index}`, errorType: classifyError(r)})).filter(r => {
     // Apply status filter
     if (statusFilter === "all") {

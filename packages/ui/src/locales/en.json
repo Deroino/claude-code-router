@@ -80,6 +80,8 @@
     "models": "Models",
     "models_placeholder": "Enter model name and press Enter to add",
     "add_model": "Add Model",
+    "remove_error_models": "Remove {{count}} error model(s)",
+    "removed_error_models": "Removed {{count}} error model(s)",
     "select_models": "Select Models",
     "remove": "Remove",
     "add": "Add Provider",
@@ -496,7 +498,27 @@
     "provider_models_summary": "Provider models will be updated to {{count}} models total",
     "confirm": "Confirm",
     "cancel": "Cancel",
-    "detecting": "Detecting..."
+    "detecting": "Detecting...",
+    "ungrouped": "Ungrouped (not in any usable group)"
+  },
+  "newapi_assignment": {
+    "title": "NewAPI Model Assignment",
+    "description": "Drag models from the pool to assign them to API keys. Each key has been pre-loaded with its current models.",
+    "model_pool": "Model Pool",
+    "search_placeholder": "Search models...",
+    "all_groups": "All",
+    "ungrouped": "Ungrouped",
+    "key_zone_title": "Key #{{index}}",
+    "key_zone_empty": "Drag models here to assign",
+    "loading": "Loading models...",
+    "error": "Failed to load models",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "models_count": "{{count}} models",
+    "duplicate_model": "Model already assigned",
+    "total_summary": "Total: {{count}} unique models across all keys",
+    "save_success": "Saved {{count}} models to provider",
+    "add_all_to_keys": "Add All to Keys"
   },
   "groups": {
     "title": "Model Groups",

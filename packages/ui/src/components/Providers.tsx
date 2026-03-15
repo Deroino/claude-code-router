@@ -25,6 +25,7 @@ import { api } from "@/lib/api";
 import { getRequestStatus, getStatusBadgeClasses } from "@/lib/requestStatus";
 import type { Provider, ApiKeyEntry } from "@/types";
 import { BatchTestDialog } from "./BatchTestDialog";
+import { NewApiAssignmentDialog } from "./NewApiAssignmentDialog";
 import type { BatchTestResult } from "./BatchTestDialog";
 
 // Model data from /v1/models endpoint
@@ -76,10 +77,9 @@ export function Providers({
   const [modelFetchError, setModelFetchError] = useState<string | null>(null);
   const [modelSearchTerm, setModelSearchTerm] = useState<string>("");
 
-  // NewAPI group assignment state
-  const [showGroupDialog, setShowGroupDialog] = useState<boolean>(false);
-  const [newApiGroups, setNewApiGroups] = useState<Record<string, string[]>>({}); // group name → model names
-  const [keyGroupAssignments, setKeyGroupAssignments] = useState<Record<number, string>>({}); // keyIndex → group name
+  // NewAPI assignment state
+  const [showNewApiAssignment, setShowNewApiAssignment] = useState<boolean>(false);
+  const [newApiPricingData, setNewApiPricingData] = useState<any>(null);
 
   // Batch test state
   const [showBatchTestDialog, setShowBatchTestDialog] = useState<boolean>(false);
@@ -706,42 +706,10 @@ export function Providers({
 
       // Handle NewAPI detection result
       if (result.type === 'newapi' && result.data) {
-        const pricingData = result.data;
-
-        // Parse group → models mapping
-        const groups: Record<string, string[]> = {};
-        const groupNames = Object.keys(pricingData.group_ratio);
-        groupNames.forEach((g: string) => { groups[g] = []; });
-
-        for (const model of pricingData.data) {
-          if (model.model_name && Array.isArray(model.enable_groups)) {
-            for (const g of model.enable_groups) {
-              if (groups[g]) {
-                groups[g].push(model.model_name);
-              }
-            }
-          }
-        }
-
-        // Show group dialog for NewAPI - works for both single and multi-key
-        const rawKeys = Array.isArray(api_key) ? api_key : [api_key];
-        if (groupNames.length > 0) {
-          // Initialize key-group assignments from existing config
-          const initialAssignments: Record<number, string> = {};
-          rawKeys.forEach((entry: any, idx: number) => {
-            if (typeof entry !== 'string' && entry?.group) {
-              initialAssignments[idx] = entry.group;
-            } else {
-              initialAssignments[idx] = groupNames[0] || '';
-            }
-          });
-
-          setNewApiGroups(groups);
-          setKeyGroupAssignments(initialAssignments);
-          setShowGroupDialog(true);
-          setIsFetchingModels(false);
-          return;
-        }
+        setNewApiPricingData(result.data);
+        setShowNewApiAssignment(true);
+        setIsFetchingModels(false);
+        return;
       }
 
       // Handle standard /v1/models result
@@ -783,70 +751,49 @@ export function Providers({
     }
   };
 
-  // Handle NewAPI group assignment confirmation
-  const handleConfirmGroupAssignment = () => {
-    if (!editingProviderData) return;
-
-    const rawKeys = Array.isArray(editingProviderData.api_key)
-      ? editingProviderData.api_key
-      : [editingProviderData.api_key || ''];
-
-    // Provider models = union of all assigned groups' models
-    const allModels = new Set<string>();
-    Object.values(keyGroupAssignments).forEach(group => {
-      (newApiGroups[group] || []).forEach(m => allModels.add(m));
+  // Handle NewAPI assignment confirmation
+  const handleNewApiAssignmentConfirm = async (result: { updatedKeys: (string | ApiKeyEntry)[]; allModels: string[] }) => {
+    console.log("[Providers] NewAPI assignment confirm:", {
+      allModels: result.allModels,
+      updatedKeys: result.updatedKeys,
+      allModelsCount: result.allModels.length,
     });
 
-    if (rawKeys.length === 1) {
-      // Single key: no per-key model filter needed, just set provider models
-      setEditingProviderData(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          models: Array.from(allModels),
-        };
+    // Directly save to config — cannot rely on editingProviderData
+    // because closing the inner Dialog triggers the outer Dialog's onOpenChange,
+    // which calls handleCancelAddProvider and resets editingProviderData to null.
+    if (editingProviderIndex !== null && editingProviderData) {
+      const existingModels = Array.isArray(editingProviderData.models) ? editingProviderData.models : [];
+      const mergedModels = [...new Set([...existingModels, ...result.allModels])];
+      const updatedProvider = { ...editingProviderData, api_key: result.updatedKeys, models: mergedModels };
+
+      console.log("[Providers] Direct save:", {
+        existing: existingModels.length,
+        new: result.allModels.length,
+        merged: mergedModels.length,
       });
 
-      const assignedGroup = keyGroupAssignments[0] || '';
-      showToast(`Selected group "${assignedGroup}", ${allModels.size} models`, "success");
-    } else {
-      // Multi-key: set per-key model filter with group info
-      const newKeys = rawKeys.map((entry, idx) => {
-        const keyStr = typeof entry === 'string' ? entry : (entry?.key || '');
-        const assignedGroup = keyGroupAssignments[idx];
-        if (!assignedGroup) return keyStr;
+      const newProviders = [...config.Providers];
+      if (isNewProvider) {
+        newProviders.push(updatedProvider);
+      } else {
+        newProviders[editingProviderIndex] = updatedProvider;
+      }
+      const newConfig = { ...config, Providers: newProviders };
+      setConfig(newConfig);
+      await flushSave(newConfig);
 
-        const groupModels = newApiGroups[assignedGroup] || [];
-        return {
-          key: keyStr,
-          group: assignedGroup,
-          models: groupModels,
-        };
-      });
-
-      setEditingProviderData(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          api_key: newKeys as any,
-          models: Array.from(allModels),
-        };
-      });
-
-      const groupCount = new Set(Object.values(keyGroupAssignments)).size;
-      showToast(`Assigned ${rawKeys.length} keys to ${groupCount} group(s), ${allModels.size} models total`, "success");
+      showToast(t("newapi_assignment.save_success", { count: mergedModels.length }), "success");
     }
 
-    setShowGroupDialog(false);
-    setNewApiGroups({});
-    setKeyGroupAssignments({});
-  };
+    // Close assignment dialog
+    setShowNewApiAssignment(false);
+    setNewApiPricingData(null);
 
-  // Cancel group assignment
-  const handleCancelGroupAssignment = () => {
-    setShowGroupDialog(false);
-    setNewApiGroups({});
-    setKeyGroupAssignments({});
+    // Close edit dialog (it would close anyway due to Radix nested dialog behavior)
+    setEditingProviderIndex(null);
+    setEditingProviderData(null);
+    setIsNewProvider(false);
   };
 
   // Handle model selection
@@ -1145,7 +1092,7 @@ export function Providers({
       </CardContent>
 
       {/* Edit Dialog */}
-      <Dialog open={editingProviderIndex !== null} onOpenChange={(open) => {
+      <Dialog open={editingProviderIndex !== null && !showNewApiAssignment} onOpenChange={(open) => {
         if (!open) {
           handleCancelAddProvider();
         }
@@ -1464,6 +1411,34 @@ export function Providers({
                       );
                     })}
                   </div>
+                  {/* Remove error models button — only shown when error models exist */}
+                  {(() => {
+                    const errorModels = (editingProvider.models || []).filter(
+                      (model: string) => getRequestStatus(requestStats, editingProvider.name || '', model) === 'error'
+                    );
+                    if (errorModels.length === 0) return null;
+                    return (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="mt-1 text-red-600 border-red-300 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:border-red-700 dark:hover:bg-red-900/20"
+                        onClick={() => {
+                          setEditingProviderData(prev => {
+                            if (!prev) return prev;
+                            const models = Array.isArray(prev.models) ? prev.models : [];
+                            const filtered = models.filter(
+                              (m: string) => getRequestStatus(requestStats, prev.name || '', m) !== 'error'
+                            );
+                            return { ...prev, models: filtered };
+                          });
+                          showToast(t("providers.removed_error_models", { count: errorModels.length }), "success");
+                        }}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 mr-1" />
+                        {t("providers.remove_error_models", { count: errorModels.length })}
+                      </Button>
+                    );
+                  })()}
                 </div>
               </div>
               
@@ -1807,104 +1782,22 @@ export function Providers({
         </DialogContent>
       </Dialog>
 
-      {/* NewAPI Group Assignment Dialog */}
-      <Dialog open={showGroupDialog} onOpenChange={handleCancelGroupAssignment}>
-        <DialogContent className="max-h-[80vh] flex flex-col sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{t('group_assignment.title')}</DialogTitle>
-            <DialogDescription>
-              {t('group_assignment.description', { count: Object.keys(newApiGroups).length })}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex-grow overflow-y-auto space-y-4 py-2">
-            {editingProviderData && (() => {
-              const rawKeys = Array.isArray(editingProviderData.api_key)
-                ? editingProviderData.api_key
-                : [editingProviderData.api_key || ''];
-              const groupNames = Object.keys(newApiGroups);
-
-              // Helper to mask API key for display
-              const maskKey = (entry: string | ApiKeyEntry): string => {
-                const k = typeof entry === 'string' ? entry : (entry?.key || '');
-                if (k.length <= 10) return '****';
-                return `${k.substring(0, 6)}...${k.substring(k.length - 4)}`;
-              };
-
-              return rawKeys.map((entry, keyIndex) => {
-                const assignedGroup = keyGroupAssignments[keyIndex] || '';
-                const groupModels = assignedGroup ? (newApiGroups[assignedGroup] || []) : [];
-
-                return (
-                  <div key={keyIndex} className="border rounded-md p-3 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium text-sm">
-                        {t('group_assignment.key_label', { index: keyIndex + 1 })}
-                        <span className="ml-2 text-xs text-muted-foreground font-mono">
-                          ({maskKey(entry)})
-                        </span>
-                      </span>
-                    </div>
-                    <select
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                      value={assignedGroup}
-                      onChange={(e) => {
-                        setKeyGroupAssignments(prev => ({
-                          ...prev,
-                          [keyIndex]: e.target.value
-                        }));
-                      }}
-                    >
-                      <option value="">{t('group_assignment.no_group')}</option>
-                      {groupNames.map(g => (
-                        <option key={g} value={g}>
-                          {g} ({t('group_assignment.models_in_group', { count: (newApiGroups[g] || []).length })})
-                        </option>
-                      ))}
-                    </select>
-                    {assignedGroup && groupModels.length > 0 && (
-                      <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto">
-                        {groupModels.slice(0, 15).map(m => (
-                          <Badge key={m} variant="outline" className="text-xs">
-                            {m}
-                          </Badge>
-                        ))}
-                        {groupModels.length > 15 && (
-                          <Badge variant="secondary" className="text-xs">
-                            +{groupModels.length - 15} more
-                          </Badge>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              });
-            })()}
-
-            {/* Summary */}
-            <div className="border-t pt-3">
-              <p className="text-sm text-muted-foreground">
-                {(() => {
-                  const allModels = new Set<string>();
-                  Object.values(keyGroupAssignments).forEach(group => {
-                    (newApiGroups[group] || []).forEach(m => allModels.add(m));
-                  });
-                  return t('group_assignment.provider_models_summary', { count: allModels.size });
-                })()}
-              </p>
-            </div>
-          </div>
-
-          <DialogFooter className="mt-4">
-            <Button variant="outline" onClick={handleCancelGroupAssignment}>
-              {t('group_assignment.cancel')}
-            </Button>
-            <Button onClick={handleConfirmGroupAssignment}>
-              {t('group_assignment.confirm')}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* NewAPI Model Assignment Dialog */}
+      {editingProviderData && newApiPricingData && (
+        <NewApiAssignmentDialog
+          open={showNewApiAssignment}
+          onOpenChange={(open) => {
+            setShowNewApiAssignment(open);
+            if (!open) setNewApiPricingData(null);
+          }}
+          pricingData={newApiPricingData}
+          apiKeys={Array.isArray(editingProviderData.api_key) ? editingProviderData.api_key : [editingProviderData.api_key || '']}
+          apiBaseUrl={editingProviderData.api_base_url || ''}
+          existingModels={editingProviderData.models || []}
+          onConfirm={handleNewApiAssignmentConfirm}
+          showToast={showToast as any}
+        />
+      )}
 
       {/* Model Selection Dialog */}
       <Dialog open={showModelSelectDialog} onOpenChange={handleCancelModelSelection}>
