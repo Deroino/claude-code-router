@@ -514,6 +514,7 @@
     "confirm": "确认",
     "cancel": "取消",
     "models_count": "{{count}} 个模型",
+    "fetch_models": "加载模型",
     "duplicate_model": "模型已分配",
     "total_summary": "合计: 所有 Key 共 {{count}} 个不重复模型",
     "save_success": "已保存 {{count}} 个模型到 Provider",

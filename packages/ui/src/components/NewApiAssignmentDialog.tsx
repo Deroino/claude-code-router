@@ -164,96 +164,102 @@ export function NewApiAssignmentDialog({
   const apiKeysRef = useRef(apiKeys);
   const apiBaseUrlRef = useRef(apiBaseUrl);
   const allModelsRef = useRef(allModels);
+  const pricingDataRef = useRef(pricingData);
   apiKeysRef.current = apiKeys;
   apiBaseUrlRef.current = apiBaseUrl;
   allModelsRef.current = allModels;
+  pricingDataRef.current = pricingData;
 
-  // Pre-load existing models for each key via /v1/models — runs ONCE when dialog opens
-  const hasLoadedRef = useRef(false);
+  // Initialize keyAssignments from existing config when dialog opens
   useEffect(() => {
-    if (!open) {
-      hasLoadedRef.current = false;
-      return;
-    }
-    if (hasLoadedRef.current) return;
-    hasLoadedRef.current = true;
+    if (!open) return;
 
-    // Capture current values from refs
+    const keys = Array.isArray(apiKeys) ? apiKeys : [apiKeys];
+    const initialAssignments: Record<number, string[]> = {};
+    const loadingStates: Record<number, boolean> = {};
+    const errorStates: Record<number, string | null> = {};
+
+    // Build a map of provider-level existing models
+    const providerModelSet = new Set(existingModels);
+
+    keys.forEach((entry, idx) => {
+      // Get existing models from ApiKeyEntry if available
+      if (typeof entry === "object" && entry?.models && entry.models.length > 0) {
+        initialAssignments[idx] = entry.models || [];
+      } else if (providerModelSet.size > 0) {
+        // If no key-specific models but provider has models, use those
+        initialAssignments[idx] = Array.from(providerModelSet);
+      } else {
+        initialAssignments[idx] = [];
+      }
+      loadingStates[idx] = false;  // Start with loading=false
+      errorStates[idx] = null;
+    });
+
+    setKeyAssignments(initialAssignments);
+    setKeyLoadingStates(loadingStates);
+    setKeyErrorStates(errorStates);
+  }, [open, apiKeys, existingModels]);
+
+  // Fetch models for a single key (triggered by button click)
+  const fetchKeyModels = useCallback(async (keyIndex: number) => {
     const currentApiKeys = apiKeysRef.current;
     const currentApiBaseUrl = apiBaseUrlRef.current;
     const currentAllModels = allModelsRef.current;
 
     const keys = Array.isArray(currentApiKeys) ? currentApiKeys : [currentApiKeys];
-    const allPricingModels = new Set(currentAllModels);
+    const entry = keys[keyIndex];
+    const keyStr = typeof entry === "string" ? entry : entry?.key || "";
 
-    // Init states
-    const initialAssignments: Record<number, string[]> = {};
-    const loadingStates: Record<number, boolean> = {};
-    const errorStates: Record<number, string | null> = {};
-    keys.forEach((_, idx) => {
-      initialAssignments[idx] = [];
-      loadingStates[idx] = true;
-      errorStates[idx] = null;
-    });
-    setKeyAssignments(initialAssignments);
-    setKeyLoadingStates(loadingStates);
-    setKeyErrorStates(errorStates);
+    if (!keyStr) {
+      setKeyErrorStates((prev) => ({ ...prev, [keyIndex]: "Empty key" }));
+      return;
+    }
 
-    // Fetch per-key models
-    const fetchAllKeys = async () => {
-      const promises = keys.map(async (entry, idx) => {
-        const keyStr = typeof entry === "string" ? entry : entry?.key || "";
-        if (!keyStr) {
-          return { idx, models: [] as string[], error: null as string | null };
-        }
+    // Set loading state for this key
+    setKeyLoadingStates((prev) => ({ ...prev, [keyIndex]: true }));
+    setKeyErrorStates((prev) => ({ ...prev, [keyIndex]: null }));
 
-        try {
-          const result = await api.fetchModels(currentApiBaseUrl, keyStr, true);
-          console.log(`[NewApiAssignment] Key#${idx} fetch result:`, {
-            success: result.success,
-            type: result.type,
-            hasData: !!result.data,
-            hasDataData: !!result.data?.data,
-            error: result.error,
-          });
-
-          if (!result.success) {
-            return { idx, models: [] as string[], error: (result.error || "Fetch failed") as string | null };
-          }
-
-          // Extract model IDs from standard OpenAI /v1/models format
-          let rawModels: string[] = [];
-          if (result.data?.data && Array.isArray(result.data.data)) {
-            rawModels = result.data.data.map((m: any) => m.id).filter(Boolean);
-          } else if (Array.isArray(result.data)) {
-            rawModels = result.data.map((m: any) => m.id || m).filter(Boolean);
-          }
-
-          const matchedModels = rawModels.filter((id: string) => allPricingModels.has(id));
-          console.log(`[NewApiAssignment] Key#${idx}: raw=${rawModels.length}, matched=${matchedModels.length}`);
-
-          // Use pricing-matched if available, otherwise use all raw models
-          const finalModels = matchedModels.length > 0 ? matchedModels : rawModels;
-          return { idx, models: finalModels, error: null as string | null };
-        } catch (err: any) {
-          console.error(`[NewApiAssignment] Key#${idx} fetch error:`, err);
-          return { idx, models: [] as string[], error: (err.message || "Failed") as string | null };
-        }
+    try {
+      const result = await api.fetchModels(currentApiBaseUrl, keyStr, true);
+      console.log(`[NewApiAssignment] Key#${keyIndex} fetch result:`, {
+        success: result.success,
+        type: result.type,
+        hasData: !!result.data,
+        hasDataData: !!result.data?.data,
+        error: result.error,
       });
 
-      const results = await Promise.allSettled(promises);
-      for (const result of results) {
-        if (result.status === "fulfilled") {
-          const { idx, models, error } = result.value;
-          setKeyAssignments((prev) => ({ ...prev, [idx]: models }));
-          setKeyLoadingStates((prev) => ({ ...prev, [idx]: false }));
-          setKeyErrorStates((prev) => ({ ...prev, [idx]: error }));
-        }
+      if (!result.success) {
+        setKeyErrorStates((prev) => ({ ...prev, [keyIndex]: result.error || "Fetch failed" }));
+        setKeyLoadingStates((prev) => ({ ...prev, [keyIndex]: false }));
+        return;
       }
-    };
 
-    fetchAllKeys();
-  }, [open]); // Only depends on `open` — refs handle the rest
+      // Extract model IDs from standard OpenAI /v1/models format
+      let rawModels: string[] = [];
+      if (result.data?.data && Array.isArray(result.data.data)) {
+        rawModels = result.data.data.map((m: any) => m.id).filter(Boolean);
+      } else if (Array.isArray(result.data)) {
+        rawModels = result.data.map((m: any) => m.id || m).filter(Boolean);
+      }
+
+      const allPricingModels = new Set(currentAllModels);
+      const matchedModels = rawModels.filter((id: string) => allPricingModels.has(id));
+      console.log(`[NewApiAssignment] Key#${keyIndex}: raw=${rawModels.length}, matched=${matchedModels.length}`);
+
+      // Use pricing-matched if available, otherwise use all raw models
+      const finalModels = matchedModels.length > 0 ? matchedModels : rawModels;
+
+      setKeyAssignments((prev) => ({ ...prev, [keyIndex]: finalModels }));
+      setKeyLoadingStates((prev) => ({ ...prev, [keyIndex]: false }));
+      setKeyErrorStates((prev) => ({ ...prev, [keyIndex]: null }));
+    } catch (err: any) {
+      console.error(`[NewApiAssignment] Key#${keyIndex} fetch error:`, err);
+      setKeyErrorStates((prev) => ({ ...prev, [keyIndex]: err.message || "Failed" }));
+      setKeyLoadingStates((prev) => ({ ...prev, [keyIndex]: false }));
+    }
+  }, []);
 
   // Native drag handlers for pool badges
   const handleDragStart = useCallback((e: React.DragEvent, modelName: string) => {
@@ -494,9 +500,24 @@ export function NewApiAssignmentDialog({
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-sm">{keyLabel}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {t("newapi_assignment.models_count", { count: models.length })}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">
+                        {t("newapi_assignment.models_count", { count: models.length })}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-xs px-2"
+                        onClick={() => fetchKeyModels(idx)}
+                        disabled={loading}
+                      >
+                        {loading ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          t("newapi_assignment.fetch_models")
+                        )}
+                      </Button>
+                    </div>
                   </div>
 
                   {loading ? (
