@@ -373,6 +373,7 @@ export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelG
                   emptyPlaceholder={t("router.noModelFound")}
                   hoveredValue={hoveredValue}
                   onItemHover={handleComboboxItemHover}
+                  modal={true}
                 />
               </div>
 
