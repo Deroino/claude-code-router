@@ -457,7 +457,15 @@
     "collapse_all": "全部折叠",
     "expand_all": "全部展开",
     "models": "个模型",
-    "key_index": "Key #{{index}}"
+    "key_index": "Key #{{index}}",
+    "remove_model": {
+      "title": "移除模型",
+      "description": "确定要从供应商 \"{{provider}}\" 中移除模型 \"{{model}}\" 吗？此操作还将清除路由器和模型组中的相关引用。",
+      "button": "移除",
+      "cancel": "取消",
+      "confirm": "确认移除"
+    },
+    "model_removed": "已从供应商 \"{{provider}}\" 中移除模型 \"{{model}}\""
   },
   "settings": {
     "no_auth": "无认证（禁用身份验证）",

@@ -1,17 +1,13 @@
 import { useState, useEffect } from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Check, X, Copy, Download, Filter, Search, XCircle, Play, Square, Zap, Wifi, ChevronDown, ChevronRight } from "lucide-react";
+import { Check, X, Copy, Download, Filter, Search, XCircle, Play, Square, Zap, Wifi, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useTranslation } from "react-i18next";
+import { useConfig } from "@/components/ConfigProvider";
+import type { Config } from "@/types";
 
 export interface BatchTestResult {
   provider: string;
@@ -153,6 +149,10 @@ interface BatchTestDialogProps {
   providerApiUrls?: Record<string, string>;
   // Callback to test connectivity for a specific URL
   onTestConnectivity?: (provider: string, url: string) => Promise<void>;
+  // Toast notifications
+  showToast?: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => string;
+  // Callback when model is removed
+  onModelRemoved?: (provider: string, model: string) => void;
 }
 
 export function BatchTestDialog({
@@ -169,6 +169,8 @@ export function BatchTestDialog({
   completedAt,
   providerApiUrls = {},
   onTestConnectivity,
+  showToast,
+  onModelRemoved,
 }: BatchTestDialogProps) {
   const { t } = useTranslation();
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "testing" | "idle">("all");
@@ -176,17 +178,76 @@ export function BatchTestDialog({
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedTests, setSelectedTests] = useState<Set<string>>(new Set());
   const [collapsedProviders, setCollapsedProviders] = useState<Set<string>>(new Set());
+  const { config, setConfig } = useConfig();
+
+  // Extract base domain from URL (protocol + hostname + port only)
+  const extractDomain = (url: string): string => {
+    try {
+      const urlObj = new URL(url);
+      return `${urlObj.protocol}//${urlObj.hostname}${urlObj.port ? ':' + urlObj.port : ''}`;
+    } catch {
+      return url;
+    }
+  };
+
+  const removeModelFromConfig = (currentConfig: Config, providerName: string, modelName: string): Config => {
+    const newConfig = { ...currentConfig };
+
+    // 1. Remove from provider's models
+    if (newConfig.Providers) {
+      newConfig.Providers = newConfig.Providers.map((p) => {
+        if (p.name === providerName && p.models) {
+          return {
+            ...p,
+            models: p.models.filter((m: string) => m !== modelName)
+          };
+        }
+        return p;
+      });
+    }
+
+    const fullModelName = `${providerName},${modelName}`;
+
+    // 2. Clean up Router references
+    if (newConfig.Router) {
+      const newRouter = { ...newConfig.Router };
+      (['default', 'background', 'think', 'longContext', 'webSearch', 'image', 'compact'] as const).forEach(key => {
+        if (newRouter[key] === fullModelName) {
+          (newRouter as any)[key] = '';
+        }
+      });
+      newConfig.Router = newRouter;
+    }
+
+    // 3. Clean up ModelGroups references
+    if (newConfig.ModelGroups) {
+      newConfig.ModelGroups = newConfig.ModelGroups.map(group => ({
+        ...group,
+        models: group.models.filter(m => m !== fullModelName)
+      }));
+    }
+
+    return newConfig;
+  };
+
+  const handleRemoveModel = (providerName: string, modelName: string) => {
+    if (!config) return;
+
+    const newConfig = removeModelFromConfig(config, providerName, modelName);
+    setConfig(newConfig);
+    if (showToast) {
+      showToast(t("batch_test.model_removed", { provider: providerName, model: modelName }), 'success');
+    }
+    if (onModelRemoved) {
+      onModelRemoved(providerName, modelName);
+    }
+  };
 
   // Initialize selected tests when results change
   useEffect(() => {
     if (open && results.length > 0) {
-      // By default select all idle or pending tests
-      const initialSelection = new Set<string>();
-      results.forEach((r, index) => {
-        const id = `${r.provider}-${r.model}-${index}`;
-        initialSelection.add(id);
-      });
-      setSelectedTests(initialSelection);
+      // Default: select none, let users manually select
+      setSelectedTests(new Set());
     }
   }, [open, results.length]);
 
@@ -710,10 +771,24 @@ export function BatchTestDialog({
                                   const errType = classifyError(result);
                                   return (
                                     <div className="flex flex-col gap-1">
-                                      <Badge className="bg-rose-100 text-rose-700 border-rose-200">
-                                        <X className="h-3 w-3 mr-1" />
-                                        {t("batch_test.failed_status")}
-                                      </Badge>
+                                      <div className="flex items-center gap-1">
+                                        <Badge className="bg-rose-100 text-rose-700 border-rose-200">
+                                          <X className="h-3 w-3 mr-1" />
+                                          {t("batch_test.failed_status")}
+                                        </Badge>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-6 w-6 p-0 text-gray-400 hover:text-red-500 hover:bg-red-50"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleRemoveModel(result.provider, result.model);
+                                          }}
+                                          title={t("batch_test.remove_model.button")}
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                        </Button>
+                                      </div>
                                       {errType !== "unknown" && (
                                         <Badge
                                           className={`text-[10px] px-1.5 py-0 flex items-center gap-0.5 ${

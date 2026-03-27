@@ -197,7 +197,7 @@ export interface ConversionOptions {
   sourceProvider: "openai" | "anthropic";
 }
 
-// Structured API key entry with optional model filter
+// Structured API key entry with optional explicit model assignment
 export interface ApiKeyEntry {
   key: string;
   models?: string[];  // If omitted, supports all provider models

@@ -458,7 +458,15 @@
     "collapse_all": "Collapse All",
     "expand_all": "Expand All",
     "models": "models",
-    "key_index": "Key #{{index}}"
+    "key_index": "Key #{{index}}",
+    "remove_model": {
+      "title": "Remove Model",
+      "description": "Are you sure you want to remove model \"{{model}}\" from provider \"{{provider}}\"? This will also clear any references in Router and Model Groups.",
+      "button": "Remove",
+      "cancel": "Cancel",
+      "confirm": "Remove"
+    },
+    "model_removed": "Model \"{{model}}\" has been removed from provider \"{{provider}}\""
   },
   "settings": {
     "no_auth": "No Auth (Disable Authentication)",

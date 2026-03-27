@@ -3,7 +3,7 @@ export interface ProviderTransformer {
   [key: string]: any; // Allow for model-specific transformers
 }
 
-// Structured API key entry with optional model filter
+// Structured API key entry with optional explicit model assignment
 export interface ApiKeyEntry {
   key: string;
   models?: string[];  // If omitted, supports all provider models

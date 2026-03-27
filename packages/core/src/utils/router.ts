@@ -183,61 +183,12 @@ const getUseModel = async (
       /<CCR-SUBAGENT-MODEL>(.*?)<\/CCR-SUBAGENT-MODEL>/s
     );
     if (model) {
-      req.body.system[1].text = req.body.system[1].text.replace(
-        `<CCR-SUBAGENT-MODEL>${model[1]}</CCR-SUBAGENT-MODEL>`,
-        ""
-      );
-      let subagentModel = model[1];
-
-      // Resolve ModelGroup if subagent model starts with "group:" prefix
-      if (subagentModel.startsWith('group:')) {
-        const groupName = subagentModel.substring(6);
-        const resolvedModel = resolveModelGroup(groupName, configService, req);
-        if (resolvedModel) {
-          subagentModel = resolvedModel;
-        } else {
-          // Group resolution failed, fall back to Router.default
-          const defaultModel = Router?.default;
-          if (defaultModel) {
-            subagentModel = defaultModel;
-            req.log.warn(`ModelGroup '${groupName}' resolution failed for subagent, falling back to default: ${defaultModel}`);
-          }
-        }
-      }
-
-      req.log.info(`[SUBAGENT] Using model from system[1].text: ${subagentModel}`);
-      return { model: subagentModel, scenarioType: 'default' };
-    }
-  }
-
-  // Also check for CCR-SUBAGENT-MODEL in the first user message (for Agent tool prompt parameter)
-  // This handles cases where the Agent tool puts the model instruction in messages instead of system
-  const firstUserMsg = req.body?.messages?.find((m: any) => m.role === "user");
-  if (firstUserMsg?.content) {
-    const contentText = typeof firstUserMsg.content === "string"
-      ? firstUserMsg.content
-      : (Array.isArray(firstUserMsg.content)
-          ? firstUserMsg.content.find((c: any) => c.type === "text")?.text || ""
-          : "");
-    if (contentText && contentText.includes("<CCR-SUBAGENT-MODEL>")) {
-      const model = contentText.match(/<CCR-SUBAGENT-MODEL>(.*?)<\/CCR-SUBAGENT-MODEL>/s);
-      if (model) {
-        // Remove the marker from the message content
-        if (typeof firstUserMsg.content === "string") {
-          firstUserMsg.content = firstUserMsg.content.replace(
-            `<CCR-SUBAGENT-MODEL>${model[1]}</CCR-SUBAGENT-MODEL>`,
-            ""
-          );
-        } else if (Array.isArray(firstUserMsg.content)) {
-          const textPart = firstUserMsg.content.find((c: any) => c.type === "text");
-          if (textPart) {
-            textPart.text = textPart.text.replace(
-              `<CCR-SUBAGENT-MODEL>${model[1]}</CCR-SUBAGENT-MODEL>`,
-              ""
-            );
-          }
-        }
-
+      // If the model name is the placeholder "provider,model", ignore it and let regular routing handle it
+      if (model[1] !== "provider,model") {
+        req.body.system[1].text = req.body.system[1].text.replace(
+          `<CCR-SUBAGENT-MODEL>${model[1]}</CCR-SUBAGENT-MODEL>`,
+          ""
+        );
         let subagentModel = model[1];
 
         // Resolve ModelGroup if subagent model starts with "group:" prefix
@@ -256,8 +207,67 @@ const getUseModel = async (
           }
         }
 
-        req.log.info(`[SUBAGENT] Using model from user message: ${subagentModel}`);
+        req.log.info(`[SUBAGENT] Using model from system[1].text: ${subagentModel}`);
         return { model: subagentModel, scenarioType: 'default' };
+      } else {
+        req.log.info("[SUBAGENT] Ignoring placeholder 'provider,model' in system[1].text, falling back to regular routing.");
+      }
+    }
+  }
+
+  // Also check for CCR-SUBAGENT-MODEL in the first user message (for Agent tool prompt parameter)
+  // This handles cases where the Agent tool puts the model instruction in messages instead of system
+  const firstUserMsg = req.body?.messages?.find((m: any) => m.role === "user");
+  if (firstUserMsg?.content) {
+    const contentText = typeof firstUserMsg.content === "string"
+      ? firstUserMsg.content
+      : (Array.isArray(firstUserMsg.content)
+          ? firstUserMsg.content.find((c: any) => c.type === "text")?.text || ""
+          : "");
+    if (contentText && contentText.includes("<CCR-SUBAGENT-MODEL>")) {
+      const model = contentText.match(/<CCR-SUBAGENT-MODEL>(.*?)<\/CCR-SUBAGENT-MODEL>/s);
+      if (model) {
+        // If the model name is the placeholder "provider,model", ignore it and let regular routing handle it
+        if (model[1] !== "provider,model") {
+          // Remove the marker from the message content
+          if (typeof firstUserMsg.content === "string") {
+            firstUserMsg.content = firstUserMsg.content.replace(
+              `<CCR-SUBAGENT-MODEL>${model[1]}</CCR-SUBAGENT-MODEL>`,
+              ""
+            );
+          } else if (Array.isArray(firstUserMsg.content)) {
+            const textPart = firstUserMsg.content.find((c: any) => c.type === "text");
+            if (textPart) {
+              textPart.text = textPart.text.replace(
+                `<CCR-SUBAGENT-MODEL>${model[1]}</CCR-SUBAGENT-MODEL>`,
+                ""
+              );
+            }
+          }
+
+          let subagentModel = model[1];
+
+          // Resolve ModelGroup if subagent model starts with "group:" prefix
+          if (subagentModel.startsWith('group:')) {
+            const groupName = subagentModel.substring(6);
+            const resolvedModel = resolveModelGroup(groupName, configService, req);
+            if (resolvedModel) {
+              subagentModel = resolvedModel;
+            } else {
+              // Group resolution failed, fall back to Router.default
+              const defaultModel = Router?.default;
+              if (defaultModel) {
+                subagentModel = defaultModel;
+                req.log.warn(`ModelGroup '${groupName}' resolution failed for subagent, falling back to default: ${defaultModel}`);
+              }
+            }
+          }
+
+          req.log.info(`[SUBAGENT] Using model from user message: ${subagentModel}`);
+          return { model: subagentModel, scenarioType: 'default' };
+        } else {
+          req.log.info("[SUBAGENT] Ignoring placeholder 'provider,model' in user message, falling back to regular routing.");
+        }
       }
     }
   }
@@ -336,8 +346,7 @@ function resolveModelGroup(
   return selectedModel;
 }
 
-export const router = async (req: any, _res: any, context: RouterContext) => {
-  // --- vvv TEMPORARY DEBUGGING CODE vvv ---
+export const router = async (req: any, _res: any, context: RouterContext) => {  // --- vvv TEMPORARY DEBUGGING CODE vvv ---
   const MAGIC_CODE = "CCR_DEBUG_COMPACT_REQUEST"; // 我们约定的魔法代码
 
   let shouldLog = false;

@@ -50,6 +50,42 @@ export class ProviderService {
   }
 
   /**
+   * Compute union of all models supported by API keys.
+   * Rules:
+   * - Key with models: use those models
+   * - Key without models (string or object without models): use fallbackModels
+   * - Result is deduplicated union
+   */
+  private computeModelsFromApiKeys(
+    apiKey: ApiKeyConfig,
+    fallbackModels: string[]
+  ): string[] {
+    if (!Array.isArray(apiKey)) {
+      return fallbackModels;
+    }
+
+    const modelsSet = new Set<string>();
+
+    apiKey.forEach((entry) => {
+      if (typeof entry === 'string') {
+        // String key: supports all fallback models
+        fallbackModels.forEach(m => modelsSet.add(m));
+      } else if (entry && typeof entry === 'object' && entry.key) {
+        // Object key
+        if (entry.models && entry.models.length > 0) {
+          // Has explicit models: use those
+          entry.models.forEach(m => modelsSet.add(m));
+        } else {
+          // No explicit models: supports all fallback models
+          fallbackModels.forEach(m => modelsSet.add(m));
+        }
+      }
+    });
+
+    return Array.from(modelsSet);
+  }
+
+  /**
    * Reload providers from current config.
    * Clears existing providers/routes and re-initializes from ConfigService.
    * apiKeyRotationIndex is intentionally preserved for rotation continuity.
@@ -127,15 +163,19 @@ export class ProviderService {
           })
         }
 
+        const configModels = providerConfig.models || [];
+        const modelsFromKeys = this.computeModelsFromApiKeys(providerConfig.api_key, configModels);
+        const finalModels = [...new Set([...configModels, ...modelsFromKeys])];
+
         this.registerProvider({
           name: providerConfig.name,
           baseUrl: providerConfig.api_base_url,
           apiKey: providerConfig.api_key,
-          models: providerConfig.models || [],
+          models: finalModels,
           transformer: providerConfig.transformer ? transformer : undefined,
         });
 
-        this.logger.info(`${providerConfig.name} provider registered`);
+        this.logger.info(`${providerConfig.name} provider registered with ${finalModels.length} models`);
       } catch (error) {
         this.logger.error(`${providerConfig.name} provider registered error: ${error}`);
       }
@@ -197,7 +237,12 @@ export class ProviderService {
         this.modelRoutes.delete(model);
       });
 
-      updates.models.forEach((model) => {
+      // Compute union of config models and API key models
+      const modelsFromKeys = this.computeModelsFromApiKeys(provider.apiKey, updates.models);
+      const finalModels = [...new Set([...updates.models, ...modelsFromKeys])];
+      updates.models = finalModels;
+
+      finalModels.forEach((model) => {
         const fullModel = `${provider.name},${model}`;
         const route: ModelRoute = {
           provider: provider.name,
