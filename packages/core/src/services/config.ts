@@ -3,6 +3,15 @@ import { join } from "path";
 import { config } from "dotenv";
 import JSON5 from 'json5';
 import { EventEmitter } from 'events';
+import {
+  isGroupReference,
+  parseGroupReference,
+  parseProviderModel,
+  ROUTER_MODEL_FIELDS,
+} from "../types/llm";
+import type { ModelGroup, RouterConfig, RouterModelField } from "../types/llm";
+
+const GROUP_NAME_REGEX = /^[a-zA-Z0-9_-]+$/;
 
 export interface ConfigOptions {
   envPath?: string;
@@ -25,6 +34,117 @@ export interface ConfigValidationResult {
 
 export type ConfigChangeListener = (newConfig: AppConfig) => void;
 export type ConfigErrorListener = (error: Error, oldConfig: AppConfig) => void;
+
+function providerModelExists(providers: any[], value: string): boolean {
+  const parsed = parseProviderModel(value);
+  if (!parsed) {
+    return false;
+  }
+
+  const provider = providers.find((item) => item?.name === parsed.provider);
+  return !!provider && Array.isArray(provider.models) && provider.models.includes(parsed.model);
+}
+
+function validateModelRouteValue(
+  value: unknown,
+  field: RouterModelField,
+  providers: any[],
+  groupNames: Set<string>
+): string | null {
+  if (value === undefined || value === "") {
+    return null;
+  }
+
+  if (typeof value !== "string") {
+    return `Router.${field} must be a string`;
+  }
+
+  if (isGroupReference(value)) {
+    const groupName = parseGroupReference(value);
+    if (!groupName || !groupNames.has(groupName)) {
+      return `Router.${field} references unknown ModelGroup '${groupName || value}'`;
+    }
+    return null;
+  }
+
+  if (!parseProviderModel(value)) {
+    return `Router.${field} must be a valid provider,model or group:<name> value`;
+  }
+
+  if (!providerModelExists(providers, value)) {
+    return `Router.${field} references unknown model '${value}'`;
+  }
+
+  return null;
+}
+
+function validateConfigSemantics(parsed: AppConfig): string | null {
+  const providers = Array.isArray(parsed.Providers)
+    ? parsed.Providers
+    : Array.isArray(parsed.providers)
+      ? parsed.providers
+      : [];
+
+  const modelGroups = parsed.ModelGroups;
+  const groupNames = new Set<string>();
+
+  if (modelGroups !== undefined) {
+    if (!Array.isArray(modelGroups)) {
+      return "ModelGroups must be an array";
+    }
+
+    for (let index = 0; index < modelGroups.length; index++) {
+      const group = modelGroups[index] as ModelGroup;
+      if (!group || typeof group !== "object") {
+        return `ModelGroups[${index}] must be an object`;
+      }
+
+      if (typeof group.name !== "string" || !group.name.trim()) {
+        return `ModelGroups[${index}].name is required`;
+      }
+
+      if (!GROUP_NAME_REGEX.test(group.name)) {
+        return `ModelGroups[${index}].name must match ${GROUP_NAME_REGEX}`;
+      }
+
+      if (groupNames.has(group.name)) {
+        return `ModelGroups contains duplicate name '${group.name}'`;
+      }
+      groupNames.add(group.name);
+
+      if (!Array.isArray(group.models) || group.models.length === 0) {
+        return `ModelGroups[${index}].models must be a non-empty array`;
+      }
+
+      for (let modelIndex = 0; modelIndex < group.models.length; modelIndex++) {
+        const member = group.models[modelIndex];
+        if (typeof member !== "string" || !parseProviderModel(member)) {
+          return `ModelGroups[${index}].models[${modelIndex}] must be in provider,model format`;
+        }
+
+        if (!providerModelExists(providers, member)) {
+          return `ModelGroups[${index}].models[${modelIndex}] references unknown model '${member}'`;
+        }
+      }
+    }
+  }
+
+  const router = parsed.Router as RouterConfig | undefined;
+  if (router !== undefined) {
+    if (typeof router !== "object" || router === null) {
+      return "Router must be an object";
+    }
+
+    for (const field of ROUTER_MODEL_FIELDS) {
+      const validationError = validateModelRouteValue(router[field], field, providers, groupNames);
+      if (validationError) {
+        return validationError;
+      }
+    }
+  }
+
+  return null;
+}
 
 export class ConfigService extends EventEmitter {
   private config: AppConfig = {};
@@ -63,15 +183,11 @@ export class ConfigService extends EventEmitter {
       this.loadEnvConfig();
     }
 
-    // if (this.options.useEnvironmentVariables) {
-    //   this.loadEnvironmentVariables();
-    // }
-
     if (this.config.LOG_FILE) {
       process.env.LOG_FILE = this.config.LOG_FILE;
     }
-    if (this.config.LOG) {
-      process.env.LOG = this.config.LOG;
+    if (this.config.LOG !== undefined) {
+      process.env.LOG = String(this.config.LOG);
     }
   }
 
@@ -173,13 +289,20 @@ export class ConfigService extends EventEmitter {
    */
   public validateConfig(jsonContent: string): ConfigValidationResult {
     try {
-      // Parse JSON5 (supports comments)
       const parsed = JSON5.parse(jsonContent);
 
       if (typeof parsed !== 'object' || parsed === null) {
         return {
           valid: false,
           error: 'Config must be a valid object'
+        };
+      }
+
+      const semanticError = validateConfigSemantics(parsed as AppConfig);
+      if (semanticError) {
+        return {
+          valid: false,
+          error: semanticError,
         };
       }
 
@@ -225,29 +348,30 @@ export class ConfigService extends EventEmitter {
       const validationResult = this.validateConfig(jsonContent);
 
       if (!validationResult.valid || !validationResult.config) {
-        // Validation failed, emit error event
         const error = new Error(validationResult.error || 'Validation failed');
         this.emit('configError', error, oldConfig);
         return validationResult;
       }
 
-      // Apply new config
       this.config = {};
 
-      // Re-apply initial config if exists
       if (this.options.initialConfig) {
         this.config = { ...this.config, ...this.options.initialConfig };
       }
 
-      // Apply parsed JSON config
       this.config = { ...this.config, ...validationResult.config };
 
-      // Apply env config if enabled
       if (this.options.useEnvFile) {
         this.loadEnvConfig();
       }
 
-      // Emit change event
+      if (this.config.LOG_FILE) {
+        process.env.LOG_FILE = this.config.LOG_FILE;
+      }
+      if (this.config.LOG !== undefined) {
+        process.env.LOG = String(this.config.LOG);
+      }
+
       this.emit('configChange', { ...this.config });
 
       return {

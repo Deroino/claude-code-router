@@ -21,6 +21,18 @@ export interface Provider {
   transformer?: ProviderTransformer;
 }
 
+export const ROUTER_MODEL_FIELDS = [
+  'default',
+  'background',
+  'think',
+  'longContext',
+  'webSearch',
+  'image',
+  'compact',
+] as const;
+
+export type RouterModelField = typeof ROUTER_MODEL_FIELDS[number];
+
 export interface RouterConfig {
     default: string;
     background: string;

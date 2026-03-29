@@ -8,9 +8,10 @@ import { Badge } from "@/components/ui/badge";
 import { Combobox } from "@/components/ui/combobox";
 import { Plus, Pencil, Trash2, X, Layers, Check } from "lucide-react";
 import { useConfig } from "./ConfigProvider";
-import type { ModelGroup, Provider } from "@/types";
+import type { Config, ModelGroup, Provider, RouterConfig, RouterModelField } from "@/types";
+import { ROUTER_MODEL_FIELDS } from "@/types";
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
-import { generateModelOptions } from "@/lib/modelOptions";
+import { buildGroupReference, generateModelOptions } from "@/lib/modelOptions";
 import { getRequestStatus, getStatusBadgeClasses } from "@/lib/requestStatus";
 import {
   Dialog,
@@ -20,6 +21,55 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+
+function getGroupUsageScenariosFromRouter(router: RouterConfig | undefined, groupName: string): RouterModelField[] {
+  if (!router) {
+    return [];
+  }
+
+  const groupRef = buildGroupReference(groupName);
+  return ROUTER_MODEL_FIELDS.filter((field) => router[field] === groupRef);
+}
+
+function updateRouterGroupReferences(
+  router: RouterConfig,
+  oldGroupName: string,
+  newGroupName?: string
+): RouterConfig {
+
+  const oldRef = buildGroupReference(oldGroupName);
+  const nextValue = newGroupName ? buildGroupReference(newGroupName) : "";
+  let changed = false;
+  const nextRouter: RouterConfig = { ...router };
+
+  for (const field of ROUTER_MODEL_FIELDS) {
+    if (nextRouter[field] === oldRef) {
+      nextRouter[field] = nextValue;
+      changed = true;
+    }
+  }
+
+  return changed ? nextRouter : router;
+}
+
+function buildNextConfigWithGroups(
+  config: Config,
+  nextGroups: ModelGroup[],
+  oldGroupName?: string,
+  newGroupName?: string
+) {
+  return {
+    ...config,
+    ModelGroups: nextGroups,
+    Router: oldGroupName
+      ? updateRouterGroupReferences(config.Router, oldGroupName, newGroupName)
+      : config.Router,
+  };
+}
+
+function getGroupUsageScenarios(router: RouterConfig | undefined, groupName: string): string[] {
+  return getGroupUsageScenariosFromRouter(router, groupName);
+}
 
 interface ModelGroupsProps {
   requestStats?: RequestStatsItem[];
@@ -107,19 +157,8 @@ export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelG
   };
 
   // Check if a group name is used in Router config
-  const getGroupUsageScenarios = (groupName: string): string[] => {
-    const router = config.Router;
-    if (!router) return [];
-    const scenarios: string[] = [];
-    const groupRef = `group:${groupName}`;
-    if (router.default === groupRef) scenarios.push("default");
-    if (router.background === groupRef) scenarios.push("background");
-    if (router.think === groupRef) scenarios.push("think");
-    if (router.longContext === groupRef) scenarios.push("longContext");
-    if (router.webSearch === groupRef) scenarios.push("webSearch");
-    if (router.image === groupRef) scenarios.push("image");
-    if (router.compact === groupRef) scenarios.push("compact");
-    return scenarios;
+  const getCurrentGroupUsageScenarios = (groupName: string): string[] => {
+    return getGroupUsageScenarios(config.Router, groupName);
   };
 
   const handleAdd = () => {
@@ -137,9 +176,15 @@ export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelG
   };
 
   const handleDelete = (index: number) => {
+    const targetGroup = groups[index];
+    if (!targetGroup) {
+      setDeletingIndex(null);
+      return;
+    }
+
     const newGroups = [...groups];
     newGroups.splice(index, 1);
-    setConfig({ ...config, ModelGroups: newGroups });
+    setConfig(buildNextConfigWithGroups(config, newGroups, targetGroup.name));
     setDeletingIndex(null);
   };
 
@@ -169,12 +214,21 @@ export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelG
     if (!validateName(editingData.name)) return;
 
     const newGroups = [...groups];
+    let nextConfig;
     if (isNew) {
       newGroups.push(editingData);
+      nextConfig = buildNextConfigWithGroups(config, newGroups);
     } else {
+      const previousGroup = groups[editingIndex];
       newGroups[editingIndex] = editingData;
+      nextConfig = buildNextConfigWithGroups(
+        config,
+        newGroups,
+        previousGroup?.name,
+        previousGroup?.name !== editingData.name ? editingData.name : undefined
+      );
     }
-    setConfig({ ...config, ModelGroups: newGroups });
+    setConfig(nextConfig);
     setEditingIndex(null);
     setEditingData(null);
     setIsNew(false);
@@ -247,7 +301,7 @@ export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelG
         ) : (
           <div className="space-y-3">
             {groups.map((group, index) => {
-              const usageScenarios = getGroupUsageScenarios(group.name);
+              const usageScenarios = getCurrentGroupUsageScenarios(group.name);
               const groupStats = getGroupStats(group);
               return (
                 <div
@@ -430,7 +484,7 @@ export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelG
             <DialogDescription>
               {t("groups.delete_confirm")}
               {deletingIndex !== null &&
-                getGroupUsageScenarios(groups[deletingIndex]?.name || "").length > 0 && (
+                getCurrentGroupUsageScenarios(groups[deletingIndex]?.name || "").length > 0 && (
                   <span className="block mt-2 text-amber-600 font-medium">
                     ⚠️ {t("groups.in_use_warning")}
                   </span>

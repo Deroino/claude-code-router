@@ -256,7 +256,76 @@ export interface ConfigProvider {
   tokenizer?: ProviderTokenizerConfig;
 }
 
+export const GROUP_REF_PREFIX = "group:";
+
+export const ROUTER_MODEL_FIELDS = [
+  "default",
+  "background",
+  "think",
+  "longContext",
+  "webSearch",
+  "image",
+  "compact",
+] as const;
+
+export type RouterModelField = typeof ROUTER_MODEL_FIELDS[number];
+
 export interface ModelGroup {
   name: string;
   models: string[]; // Each item is "providerName,modelName" format
+}
+
+export function isGroupReference(value: string | null | undefined): value is string {
+  return typeof value === "string" && value.startsWith(GROUP_REF_PREFIX);
+}
+
+export function parseGroupReference(value: string | null | undefined): string | null {
+  if (!isGroupReference(value)) {
+    return null;
+  }
+
+  return value.slice(GROUP_REF_PREFIX.length);
+}
+
+export function buildGroupReference(groupName: string): string {
+  return `${GROUP_REF_PREFIX}${groupName}`;
+}
+
+export function parseProviderModel(value: string | null | undefined): { provider: string; model: string } | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const commaIndex = value.indexOf(",");
+  if (commaIndex <= 0 || commaIndex === value.length - 1) {
+    return null;
+  }
+
+  return {
+    provider: value.slice(0, commaIndex),
+    model: value.slice(commaIndex + 1),
+  };
+}
+
+export type RouterScenarioType = "default" | "background" | "think" | "longContext" | "webSearch" | "image" | "compact";
+
+export interface RouterFallbackConfig {
+  default?: string[];
+  background?: string[];
+  think?: string[];
+  longContext?: string[];
+  webSearch?: string[];
+  image?: string[];
+  compact?: string[];
+}
+
+export interface RouterConfig {
+  default?: string;
+  background?: string;
+  think?: string;
+  longContext?: string;
+  longContextThreshold?: number;
+  webSearch?: string;
+  image?: string;
+  compact?: string;
 }

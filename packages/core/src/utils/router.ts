@@ -7,7 +7,12 @@ import { CLAUDE_PROJECTS_DIR, HOME_DIR } from "@CCR/shared";
 import { LRUCache } from "lru-cache";
 import { ConfigService } from "../services/config";
 import { TokenizerService } from "../services/tokenizer";
-import type { ModelGroup } from "../types/llm";
+import {
+  isGroupReference,
+  parseGroupReference,
+  parseProviderModel,
+} from "../types/llm";
+import type { ModelGroup, RouterConfig, RouterScenarioType } from "../types/llm";
 
 // Types from @anthropic-ai/sdk
 interface Tool {
@@ -147,18 +152,8 @@ const getUseModel = async (
     }
   }
 
-  if (req.body.model.includes(",")) {
-    const [provider, model] = req.body.model.split(",");
-    const finalProvider = providers.find(
-      (p: any) => p.name.toLowerCase() === provider
-    );
-    const finalModel = finalProvider?.models?.find(
-      (m: any) => m.toLowerCase() === model
-    );
-    if (finalProvider && finalModel) {
-      return { model: `${finalProvider.name},${finalModel}`, scenarioType: 'default' };
-    }
-    return { model: req.body.model, scenarioType: 'default' };
+  if (parseProviderModel(req.body.model)) {
+    return { model: normalizeExplicitProviderModel(req.body.model, providers), scenarioType: 'default' };
   }
 
   // if tokenCount is greater than the configured threshold, use the long context model
@@ -174,102 +169,9 @@ const getUseModel = async (
     );
     return { model: Router.longContext, scenarioType: 'longContext' };
   }
-  // Check for CCR-SUBAGENT-MODEL in system[1].text (original location)
-  if (
-    req.body?.system?.length > 1 &&
-    req.body?.system[1]?.text?.startsWith("<CCR-SUBAGENT-MODEL>")
-  ) {
-    const model = req.body?.system[1].text.match(
-      /<CCR-SUBAGENT-MODEL>(.*?)<\/CCR-SUBAGENT-MODEL>/s
-    );
-    if (model) {
-      // If the model name is the placeholder "provider,model", ignore it and let regular routing handle it
-      if (model[1] !== "provider,model") {
-        req.body.system[1].text = req.body.system[1].text.replace(
-          `<CCR-SUBAGENT-MODEL>${model[1]}</CCR-SUBAGENT-MODEL>`,
-          ""
-        );
-        let subagentModel = model[1];
-
-        // Resolve ModelGroup if subagent model starts with "group:" prefix
-        if (subagentModel.startsWith('group:')) {
-          const groupName = subagentModel.substring(6);
-          const resolvedModel = resolveModelGroup(groupName, configService, req);
-          if (resolvedModel) {
-            subagentModel = resolvedModel;
-          } else {
-            // Group resolution failed, fall back to Router.default
-            const defaultModel = Router?.default;
-            if (defaultModel) {
-              subagentModel = defaultModel;
-              req.log.warn(`ModelGroup '${groupName}' resolution failed for subagent, falling back to default: ${defaultModel}`);
-            }
-          }
-        }
-
-        req.log.info(`[SUBAGENT] Using model from system[1].text: ${subagentModel}`);
-        return { model: subagentModel, scenarioType: 'default' };
-      } else {
-        req.log.info("[SUBAGENT] Ignoring placeholder 'provider,model' in system[1].text, falling back to regular routing.");
-      }
-    }
-  }
-
-  // Also check for CCR-SUBAGENT-MODEL in the first user message (for Agent tool prompt parameter)
-  // This handles cases where the Agent tool puts the model instruction in messages instead of system
-  const firstUserMsg = req.body?.messages?.find((m: any) => m.role === "user");
-  if (firstUserMsg?.content) {
-    const contentText = typeof firstUserMsg.content === "string"
-      ? firstUserMsg.content
-      : (Array.isArray(firstUserMsg.content)
-          ? firstUserMsg.content.find((c: any) => c.type === "text")?.text || ""
-          : "");
-    if (contentText && contentText.includes("<CCR-SUBAGENT-MODEL>")) {
-      const model = contentText.match(/<CCR-SUBAGENT-MODEL>(.*?)<\/CCR-SUBAGENT-MODEL>/s);
-      if (model) {
-        // If the model name is the placeholder "provider,model", ignore it and let regular routing handle it
-        if (model[1] !== "provider,model") {
-          // Remove the marker from the message content
-          if (typeof firstUserMsg.content === "string") {
-            firstUserMsg.content = firstUserMsg.content.replace(
-              `<CCR-SUBAGENT-MODEL>${model[1]}</CCR-SUBAGENT-MODEL>`,
-              ""
-            );
-          } else if (Array.isArray(firstUserMsg.content)) {
-            const textPart = firstUserMsg.content.find((c: any) => c.type === "text");
-            if (textPart) {
-              textPart.text = textPart.text.replace(
-                `<CCR-SUBAGENT-MODEL>${model[1]}</CCR-SUBAGENT-MODEL>`,
-                ""
-              );
-            }
-          }
-
-          let subagentModel = model[1];
-
-          // Resolve ModelGroup if subagent model starts with "group:" prefix
-          if (subagentModel.startsWith('group:')) {
-            const groupName = subagentModel.substring(6);
-            const resolvedModel = resolveModelGroup(groupName, configService, req);
-            if (resolvedModel) {
-              subagentModel = resolvedModel;
-            } else {
-              // Group resolution failed, fall back to Router.default
-              const defaultModel = Router?.default;
-              if (defaultModel) {
-                subagentModel = defaultModel;
-                req.log.warn(`ModelGroup '${groupName}' resolution failed for subagent, falling back to default: ${defaultModel}`);
-              }
-            }
-          }
-
-          req.log.info(`[SUBAGENT] Using model from user message: ${subagentModel}`);
-          return { model: subagentModel, scenarioType: 'default' };
-        } else {
-          req.log.info("[SUBAGENT] Ignoring placeholder 'provider,model' in user message, falling back to regular routing.");
-        }
-      }
-    }
+  const subagentModel = tryResolveSubagentModelFromRequest(req, configService);
+  if (subagentModel) {
+    return { model: subagentModel, scenarioType: 'default' };
   }
   // Use the background model for any Claude Haiku variant
   const globalRouter = configService.get("Router");
@@ -280,6 +182,11 @@ const getUseModel = async (
   ) {
     req.log.info(`Using background model for ${req.body.model}`);
     return { model: globalRouter.background, scenarioType: 'background' };
+  }
+
+  if (isImageRequest(req) && Router?.image) {
+    req.log.info("Using image model for image request");
+    return { model: Router.image, scenarioType: 'image' };
   }
 
   // The priority of websearch must be higher than thinking.
@@ -298,24 +205,27 @@ const getUseModel = async (
   return { model: Router?.default, scenarioType: 'default' };
 };
 
+function getTokenizerLookupModel(model: string | undefined, fallbackModel: string): string {
+  const candidate = model || fallbackModel;
+  if (parseProviderModel(candidate)) {
+    return candidate;
+  }
+
+  return fallbackModel;
+}
+
 export interface RouterContext {
   configService: ConfigService;
   tokenizerService?: TokenizerService;
   event?: any;
 }
 
-export type RouterScenarioType = 'default' | 'background' | 'think' | 'longContext' | 'webSearch' | 'compact';
-
-export interface RouterFallbackConfig {
-  default?: string[];
-  background?: string[];
-  think?: string[];
-  longContext?: string[];
-  webSearch?: string[];
-}
-
 // Round-robin index for model groups
 const groupRotationIndex = new Map<string, number>();
+
+export function resetModelGroupRotationState(): void {
+  groupRotationIndex.clear();
+}
 
 /**
  * Resolve a model group name to a specific "provider,model" string using round-robin.
@@ -338,12 +248,198 @@ function resolveModelGroup(
     return null;
   }
 
-  let index = groupRotationIndex.get(groupName) || 0;
+  const index = groupRotationIndex.get(groupName) || 0;
   const selectedModel = group.models[index % group.models.length];
   groupRotationIndex.set(groupName, index + 1);
 
   req.log.info(`ModelGroup '${groupName}' selected: ${selectedModel} (index: ${index})`);
   return selectedModel;
+}
+
+function resolveRouteModelValue(
+  value: string | undefined,
+  configService: ConfigService,
+  req: any,
+  options: {
+    fallbackToDefault?: boolean;
+    visitedGroups?: Set<string>;
+  } = {}
+): string | undefined {
+  if (!value) {
+    return value;
+  }
+
+  if (!isGroupReference(value)) {
+    return value;
+  }
+
+  const groupName = parseGroupReference(value);
+  if (!groupName) {
+    return value;
+  }
+
+  const visitedGroups = options.visitedGroups ?? new Set<string>();
+  if (visitedGroups.has(groupName)) {
+    req.log.error(`Detected recursive ModelGroup fallback for '${groupName}'`);
+    return undefined;
+  }
+  visitedGroups.add(groupName);
+
+  const resolved = resolveModelGroup(groupName, configService, req);
+  if (resolved) {
+    return resolved;
+  }
+
+  if (!options.fallbackToDefault) {
+    return undefined;
+  }
+
+  const routerConfig = configService.get<RouterConfig>("Router");
+  const defaultRoute = routerConfig?.default;
+  if (!defaultRoute || defaultRoute === value) {
+    req.log.error(`Cannot resolve ModelGroup '${groupName}' and no valid default model available`);
+    return undefined;
+  }
+
+  const fallbackResolved = resolveRouteModelValue(defaultRoute, configService, req, {
+    fallbackToDefault: false,
+    visitedGroups,
+  });
+
+  if (fallbackResolved) {
+    req.log.warn(`ModelGroup '${groupName}' resolution failed, falling back to default: ${fallbackResolved}`);
+  } else {
+    req.log.error(`Cannot resolve ModelGroup '${groupName}' and no valid default model available`);
+  }
+
+  return fallbackResolved;
+}
+
+function extractTaggedSubagentModel(text: string | undefined): string | null {
+  if (!text || !text.includes("<CCR-SUBAGENT-MODEL>")) {
+    return null;
+  }
+
+  const match = text.match(/<CCR-SUBAGENT-MODEL>(.*?)<\/CCR-SUBAGENT-MODEL>/s);
+  if (!match || match[1] === "provider,model") {
+    return null;
+  }
+
+  return match[1];
+}
+
+function removeTaggedSubagentModel(text: string, model: string): string {
+  return text.replace(`<CCR-SUBAGENT-MODEL>${model}</CCR-SUBAGENT-MODEL>`, "");
+}
+
+function resolveTaggedSubagentModel(
+  taggedModel: string,
+  configService: ConfigService,
+  req: any
+): string | undefined {
+  return resolveRouteModelValue(taggedModel, configService, req, {
+    fallbackToDefault: true,
+  }) || taggedModel;
+}
+
+function normalizeExplicitProviderModel(value: string, providers: any[]): string {
+  const parsed = parseProviderModel(value);
+  if (!parsed) {
+    return value;
+  }
+
+  const finalProvider = providers.find(
+    (p: any) => p.name.toLowerCase() === parsed.provider.toLowerCase()
+  );
+  const finalModel = finalProvider?.models?.find(
+    (m: any) => typeof m === "string" && m.toLowerCase() === parsed.model.toLowerCase()
+  );
+
+  if (finalProvider && finalModel) {
+    return `${finalProvider.name},${finalModel}`;
+  }
+
+  return value;
+}
+
+function isImageRequest(req: any): boolean {
+  return Array.isArray(req.body?.messages) && req.body.messages.some((message: any) => {
+    if (!Array.isArray(message?.content)) {
+      return false;
+    }
+
+    return message.content.some((part: any) => part?.type === "image" || part?.type === "image_url");
+  });
+}
+
+function getFirstUserTextMessageContent(req: any): string {
+  const firstUserMsg = req.body?.messages?.find((m: any) => m.role === "user");
+  if (!firstUserMsg?.content) {
+    return "";
+  }
+
+  return typeof firstUserMsg.content === "string"
+    ? firstUserMsg.content
+    : (Array.isArray(firstUserMsg.content)
+        ? firstUserMsg.content.find((c: any) => c.type === "text")?.text || ""
+        : "");
+}
+
+function tryResolveSubagentModelFromRequest(
+  req: any,
+  configService: ConfigService
+): string | undefined {
+  if (
+    req.body?.system?.length > 1 &&
+    typeof req.body?.system[1]?.text === "string"
+  ) {
+    const taggedModel = extractTaggedSubagentModel(req.body.system[1].text);
+    if (taggedModel) {
+      req.body.system[1].text = removeTaggedSubagentModel(req.body.system[1].text, taggedModel);
+      const resolved = resolveTaggedSubagentModel(taggedModel, configService, req);
+      req.log.info(`[SUBAGENT] Using model from system[1].text: ${resolved}`);
+      return resolved;
+    }
+    if (req.body.system[1].text.includes("<CCR-SUBAGENT-MODEL>provider,model</CCR-SUBAGENT-MODEL>")) {
+      req.log.info("[SUBAGENT] Ignoring placeholder 'provider,model' in system[1].text, falling back to regular routing.");
+    }
+  }
+
+  const firstUserMsg = req.body?.messages?.find((m: any) => m.role === "user");
+  const contentText = getFirstUserTextMessageContent(req);
+  if (contentText) {
+    const taggedModel = extractTaggedSubagentModel(contentText);
+    if (taggedModel) {
+      if (typeof firstUserMsg.content === "string") {
+        firstUserMsg.content = removeTaggedSubagentModel(firstUserMsg.content, taggedModel);
+      } else if (Array.isArray(firstUserMsg.content)) {
+        const textPart = firstUserMsg.content.find((c: any) => c.type === "text");
+        if (textPart) {
+          textPart.text = removeTaggedSubagentModel(textPart.text, taggedModel);
+        }
+      }
+
+      const resolved = resolveTaggedSubagentModel(taggedModel, configService, req);
+      req.log.info(`[SUBAGENT] Using model from user message: ${resolved}`);
+      return resolved;
+    }
+    if (contentText.includes("<CCR-SUBAGENT-MODEL>provider,model</CCR-SUBAGENT-MODEL>")) {
+      req.log.info("[SUBAGENT] Ignoring placeholder 'provider,model' in user message, falling back to regular routing.");
+    }
+  }
+
+  return undefined;
+}
+
+function finalizeRouteModel(
+  model: string | undefined,
+  configService: ConfigService,
+  req: any,
+  options: { fallbackToDefault?: boolean } = {}
+): string | undefined {
+  return resolveRouteModelValue(model, configService, req, {
+    fallbackToDefault: options.fallbackToDefault ?? true,
+  }) || model;
 }
 
 export const router = async (req: any, _res: any, context: RouterContext) => {  // --- vvv TEMPORARY DEBUGGING CODE vvv ---
@@ -398,11 +494,14 @@ export const router = async (req: any, _res: any, context: RouterContext) => {  
 
   try {
     // Try to get tokenizer config for the current model
-    const [providerName, modelName] = req.body.model.split(",");
-    const tokenizerConfig = context.tokenizerService?.getTokenizerConfigForModel(
-      providerName,
-      modelName
-    );
+    const tokenizerLookupModel = getTokenizerLookupModel(req.body.model, configService.get<RouterConfig>("Router")?.default || req.body.model);
+    const parsedTokenizerModel = parseProviderModel(tokenizerLookupModel);
+    const tokenizerConfig = parsedTokenizerModel
+      ? context.tokenizerService?.getTokenizerConfigForModel(
+          parsedTokenizerModel.provider,
+          parsedTokenizerModel.model
+        )
+      : undefined;
 
     // Use TokenizerService if available, otherwise fall back to legacy method
     let tokenCount: number;
@@ -448,31 +547,11 @@ export const router = async (req: any, _res: any, context: RouterContext) => {  
       req.scenarioType = 'default';
     }
 
-    // Resolve ModelGroup if model starts with "group:" prefix
-    if (model && model.startsWith('group:')) {
-      const groupName = model.substring(6);
-      const resolved = resolveModelGroup(groupName, configService, req);
-      if (resolved) {
-        model = resolved;
-      } else {
-        // Group resolution failed, fall back to Router.default
-        const Router = configService.get<any>("Router");
-        const defaultModel = Router?.default;
-        // Avoid infinite recursion if default itself is a group
-        if (defaultModel && !defaultModel.startsWith('group:')) {
-          model = defaultModel;
-          req.log.warn(`ModelGroup '${groupName}' resolution failed, falling back to default: ${defaultModel}`);
-        } else {
-          req.log.error(`Cannot resolve ModelGroup '${groupName}' and no valid default model available`);
-        }
-      }
-    }
-
-    req.body.model = model;
+    req.body.model = finalizeRouteModel(model, configService, req, { fallbackToDefault: true });
   } catch (error: any) {
     req.log.error(`Error in router middleware: ${error.message}`);
-    const Router = configService.get("Router");
-    req.body.model = Router?.default;
+    const routerConfig = configService.get<RouterConfig>("Router");
+    req.body.model = finalizeRouteModel(routerConfig?.default, configService, req, { fallbackToDefault: false });
     req.scenarioType = 'default';
   }
   return;

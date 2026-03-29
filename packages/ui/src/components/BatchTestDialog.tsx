@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Check, X, Copy, Download, Filter, Search, XCircle, Play, Square, Zap, Wifi, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
+import { Check, X, Copy, Download, Filter, Search, XCircle, Play, Square, Zap, Wifi, ChevronDown, ChevronRight, Trash2, RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useTranslation } from "react-i18next";
@@ -35,6 +35,12 @@ function extractStrings(obj: unknown): string[] {
 /**
  * Classify error type based on error message/response content
  */
+function getBatchTestResultKey(result: { provider: string; model: string; keyIndex?: number }): string {
+  return result.keyIndex !== undefined
+    ? `${result.provider}-${result.model}-key${result.keyIndex}`
+    : `${result.provider}-${result.model}`;
+}
+
 function classifyError(result: BatchTestResult): ErrorType {
   if (result.status !== "error") return "unknown";
 
@@ -153,6 +159,10 @@ interface BatchTestDialogProps {
   showToast?: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => string;
   // Callback when model is removed
   onModelRemoved?: (provider: string, model: string) => void;
+  // Callback when removing failed models for a provider
+  onFailedModelsRemoved?: (provider: string, models: string[]) => void;
+  // Callback when retrying a single failed test
+  onRetryTest?: (test: BatchTestResult) => void;
 }
 
 export function BatchTestDialog({
@@ -171,6 +181,8 @@ export function BatchTestDialog({
   onTestConnectivity,
   showToast,
   onModelRemoved,
+  onFailedModelsRemoved,
+  onRetryTest,
 }: BatchTestDialogProps) {
   const { t } = useTranslation();
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "testing" | "idle">("all");
@@ -178,6 +190,7 @@ export function BatchTestDialog({
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedTests, setSelectedTests] = useState<Set<string>>(new Set());
   const [collapsedProviders, setCollapsedProviders] = useState<Set<string>>(new Set());
+  const [retryingErrorKeys, setRetryingErrorKeys] = useState<Set<string>>(new Set());
   const { config, setConfig } = useConfig();
 
   // Extract base domain from URL (protocol + hostname + port only)
@@ -235,6 +248,15 @@ export function BatchTestDialog({
 
     const newConfig = removeModelFromConfig(config, providerName, modelName);
     setConfig(newConfig);
+    setSelectedTests(prev => {
+      const next = new Set(prev);
+      results.forEach((result, index) => {
+        if (result.provider === providerName && result.model === modelName) {
+          next.delete(`${result.provider}-${result.model}-${index}`);
+        }
+      });
+      return next;
+    });
     if (showToast) {
       showToast(t("batch_test.model_removed", { provider: providerName, model: modelName }), 'success');
     }
@@ -242,6 +264,44 @@ export function BatchTestDialog({
       onModelRemoved(providerName, modelName);
     }
   };
+
+  const clearSelectedTestsByModels = (providerName: string, modelNames: string[]) => {
+    const modelSet = new Set(modelNames);
+    setSelectedTests(prev => {
+      const next = new Set(prev);
+      results.forEach((result, index) => {
+        if (result.provider === providerName && modelSet.has(result.model)) {
+          next.delete(`${result.provider}-${result.model}-${index}`);
+        }
+      });
+      return next;
+    });
+  };
+
+  const handleRemoveFailedModels = (providerName: string, providerResults: Array<BatchTestResult & { id: string }>) => {
+    if (!config) return;
+
+    const failedModels = Array.from(new Set(
+      providerResults
+        .filter(result => result.status === "error")
+        .map(result => result.model)
+    ));
+
+    if (failedModels.length === 0) return;
+
+    let newConfig = config;
+    failedModels.forEach(modelName => {
+      newConfig = removeModelFromConfig(newConfig, providerName, modelName);
+    });
+
+    setConfig(newConfig);
+    clearSelectedTestsByModels(providerName, failedModels);
+    if (showToast) {
+      showToast(t("batch_test.failed_models_removed", { provider: providerName, count: failedModels.length }), 'success');
+    }
+    onFailedModelsRemoved?.(providerName, failedModels);
+  };
+
 
   // Initialize selected tests when results change
   useEffect(() => {
@@ -260,12 +320,29 @@ export function BatchTestDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const filteredResults = results.map((r, index) => ({...r, id: `${r.provider}-${r.model}-${index}`, errorType: classifyError(r)})).filter(r => {
+  useEffect(() => {
+    setRetryingErrorKeys(prev => {
+      if (prev.size === 0) return prev;
+      const resultMap = new Map(results.map(result => [getBatchTestResultKey(result), result]));
+      const next = new Set<string>();
+      prev.forEach(key => {
+        const result = resultMap.get(key);
+        if (result && (result.status === "idle" || result.status === "pending" || result.status === "testing")) {
+          next.add(key);
+        }
+      });
+      return next;
+    });
+  }, [results]);
+
+  const filteredResults = results.map((r, index) => ({...r, id: `${r.provider}-${r.model}-${index}`, stableKey: getBatchTestResultKey(r), errorType: classifyError(r)})).filter(r => {
     // Apply status filter
     if (statusFilter === "all") {
       // pass
     } else if (statusFilter === "testing") {
       if (r.status !== "testing" && r.status !== "pending") return false;
+    } else if (statusFilter === "error") {
+      if (r.status !== "error" && !retryingErrorKeys.has(r.stableKey)) return false;
     } else {
       if (r.status !== statusFilter) return false;
     }
@@ -397,8 +474,21 @@ export function BatchTestDialog({
         const id = `${r.provider}-${r.model}-${index}`;
         return selectedTests.has(id);
       });
+      const retriedErrorKeys = selected
+        .filter(test => test.status === "error")
+        .map(test => getBatchTestResultKey(test));
+      if (retriedErrorKeys.length > 0) {
+        setRetryingErrorKeys(prev => new Set([...prev, ...retriedErrorKeys]));
+      }
       onRunTests(selected);
     }
+  };
+
+  const handleRetrySingleTest = (test: BatchTestResult) => {
+    if (test.status === "error") {
+      setRetryingErrorKeys(prev => new Set([...prev, getBatchTestResultKey(test)]));
+    }
+    onRetryTest?.(test);
   };
 
   return (
@@ -676,6 +766,7 @@ export function BatchTestDialog({
                 const providerSuccessCount = providerResults.filter(r => r.status === "success").length;
                 const providerErrorCount = providerResults.filter(r => r.status === "error").length;
                 const providerSelectedCount = providerResults.filter(r => selectedTests.has(r.id)).length;
+                const providerHasFailedModels = providerErrorCount > 0;
 
                 return (
                   <div key={provider} className="bg-white">
@@ -725,6 +816,18 @@ export function BatchTestDialog({
                           {providerErrorCount} {t("batch_test.failed")}
                         </Badge>
                       )}
+                      <div className="ml-auto flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 p-0 text-gray-400 hover:text-red-500 hover:bg-red-50"
+                          onClick={() => handleRemoveFailedModels(provider, providerResults)}
+                          disabled={!providerHasFailedModels}
+                          title={t("batch_test.remove_failed_models")}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
                     </div>
 
                     {/* Models Table (when expanded) */}
@@ -776,6 +879,18 @@ export function BatchTestDialog({
                                           <X className="h-3 w-3 mr-1" />
                                           {t("batch_test.failed_status")}
                                         </Badge>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-6 w-6 p-0 text-gray-400 hover:text-blue-500 hover:bg-blue-50"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleRetrySingleTest(result);
+                                          }}
+                                          title={t("batch_test.retry")}
+                                        >
+                                          <RotateCcw className="h-3 w-3" />
+                                        </Button>
                                         <Button
                                           variant="ghost"
                                           size="icon"

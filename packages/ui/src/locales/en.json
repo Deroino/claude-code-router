@@ -425,6 +425,7 @@
     "selected": "{{count}} selected",
     "close": "Close",
     "run_selected": "Run Selected Tests",
+    "retry": "Retry",
     "success_status": "Success",
     "failed_status": "Failed",
     "testing_status": "Testing...",
@@ -466,7 +467,9 @@
       "cancel": "Cancel",
       "confirm": "Remove"
     },
-    "model_removed": "Model \"{{model}}\" has been removed from provider \"{{provider}}\""
+    "model_removed": "Model \"{{model}}\" has been removed from provider \"{{provider}}\"",
+    "remove_failed_models": "Remove Failed Models",
+    "failed_models_removed": "Removed {{count}} failed models from provider \"{{provider}}\""
   },
   "settings": {
     "no_auth": "No Auth (Disable Authentication)",

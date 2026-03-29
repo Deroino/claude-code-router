@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { useConfig } from "./ConfigProvider";
 import { Combobox } from "./ui/combobox";
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
-import { generateModelOptions, generateGroupOptions, generateAllOptions } from "@/lib/modelOptions";
+import { generateAllOptions, isGroupReference } from "@/lib/modelOptions";
 
 interface RouterProps {
   hoveredModel?: { provider: string | null; model: string | null };
@@ -60,12 +60,12 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
     if (!onHoverModel) return;
 
     // Group references don't trigger single model highlighting
-    if (modelValue && modelValue.startsWith('group:')) {
+    if (isGroupReference(modelValue)) {
       onHoverModel(null, null);
       return;
     }
 
-    if (modelValue && modelValue.includes(',')) {
+    if (typeof modelValue === 'string' && modelValue.includes(',')) {
       const [provider, ...modelParts] = modelValue.split(',');
       const model = modelParts.join(','); // Handle model names that might contain commas
       console.log('[Router] Parsed:', { provider, model });
@@ -89,12 +89,12 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
     if (!onHoverModel) return;
 
     // Group references don't trigger single model highlighting
-    if (modelValue && modelValue.startsWith('group:')) {
+    if (isGroupReference(modelValue)) {
       onHoverModel(null, null);
       return;
     }
 
-    if (modelValue && modelValue.includes(',')) {
+    if (typeof modelValue === 'string' && modelValue.includes(',')) {
       const [provider, ...modelParts] = modelValue.split(',');
       const model = modelParts.join(',');
       console.log('[Router] Parsed combobox item:', { provider, model });
@@ -110,8 +110,6 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
   const providers = Array.isArray(config.Providers) ? config.Providers : [];
 
   // Generate options using shared utility functions
-  const modelOptions = generateModelOptions(providers, requestStats);
-  const groupOptions = generateGroupOptions(config.ModelGroups || []);
   const allOptions = generateAllOptions(providers, config.ModelGroups || [], requestStats);
 
   // Construct the hovered value for highlighting

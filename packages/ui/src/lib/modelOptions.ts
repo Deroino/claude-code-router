@@ -2,6 +2,24 @@ import type { RequestStatsItem } from "@/hooks/useRequestStats";
 import type { Provider, ModelGroup } from "@/types";
 import { getRequestStatus } from "./requestStatus";
 
+export const GROUP_REF_PREFIX = "group:";
+
+export function isGroupReference(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith(GROUP_REF_PREFIX);
+}
+
+export function parseGroupReference(value: string | null | undefined): string | null {
+  if (typeof value !== "string" || !isGroupReference(value)) {
+    return null;
+  }
+
+  return value.slice(GROUP_REF_PREFIX.length);
+}
+
+export function buildGroupReference(groupName: string): string {
+  return `${GROUP_REF_PREFIX}${groupName}`;
+}
+
 /**
  * Model option with status and stats information
  */
@@ -72,7 +90,7 @@ export function generateModelOptions(
 export function generateGroupOptions(modelGroups: ModelGroup[]): ModelOption[] {
   const groups = Array.isArray(modelGroups) ? modelGroups : [];
   return groups.map(group => ({
-    value: `group:${group.name}`,
+    value: buildGroupReference(group.name),
     label: `⊞ ${group.name} (${group.models?.length || 0})`,
     status: 'neutral' as const,
     successCount: 0,

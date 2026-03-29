@@ -32,7 +32,7 @@ import { ProviderService } from "./services/provider";
 import { TransformerService } from "./services/transformer";
 import { TokenizerService } from "./services/tokenizer";
 import { requestStatsService } from "./services/requestStats";
-import { router, calculateTokenCount, searchProjectBySession } from "./utils/router";
+import { router, calculateTokenCount, searchProjectBySession, resetModelGroupRotationState } from "./utils/router";
 import { sessionUsageCache } from "./utils/cache";
 
 // Extend FastifyRequest to include custom properties
@@ -114,6 +114,7 @@ class Server {
         reloadTimer = setTimeout(async () => {
           try {
             this.app.log.info('Config changed, reloading services...');
+            resetModelGroupRotationState();
             await this.transformerService.reloadCustomTransformers();
             this.providerService.reload();
             this.app.log.info('All services reloaded successfully');
@@ -317,7 +318,7 @@ export { sessionUsageCache };
 export { router };
 export { calculateTokenCount };
 export { searchProjectBySession };
-export type { RouterScenarioType, RouterFallbackConfig } from "./utils/router";
+export type { RouterScenarioType, RouterFallbackConfig } from "./types/llm";
 export { ConfigService } from "./services/config";
 export { ProviderService } from "./services/provider";
 export { TransformerService } from "./services/transformer";

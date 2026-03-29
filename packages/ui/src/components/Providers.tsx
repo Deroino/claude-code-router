@@ -28,6 +28,72 @@ import { BatchTestDialog } from "./BatchTestDialog";
 import { NewApiAssignmentDialog } from "./NewApiAssignmentDialog";
 import type { BatchTestResult } from "./BatchTestDialog";
 
+const getBatchTestResultKey = (result: { provider: string; model: string; keyIndex?: number }) => {
+  return result.keyIndex !== undefined
+    ? `${result.provider}-${result.model}-key${result.keyIndex}`
+    : `${result.provider}-${result.model}`;
+};
+
+const mergeBatchTestResults = (prev: BatchTestResult[], incoming: BatchTestResult[]) => {
+  const incomingMap = new Map(incoming.map(result => [getBatchTestResultKey(result), result]));
+  const merged = prev.map(result => incomingMap.get(getBatchTestResultKey(result)) || result);
+  const existingKeys = new Set(prev.map(result => getBatchTestResultKey(result)));
+  const appended = incoming.filter(result => !existingKeys.has(getBatchTestResultKey(result)));
+  return [...merged, ...appended];
+};
+
+const markBatchTestsAsTesting = (prev: BatchTestResult[], selectedTests: BatchTestResult[]): BatchTestResult[] => {
+  if (selectedTests.length === 0) return prev;
+  const selectedKeys = new Set(selectedTests.map(getBatchTestResultKey));
+  return prev.map(result => {
+    if (!selectedKeys.has(getBatchTestResultKey(result))) {
+      return result;
+    }
+    return {
+      ...result,
+      status: "testing" as const,
+      message: undefined,
+      response: undefined,
+      timestamp: Date.now(),
+    };
+  });
+};
+
+const mergePersistedBatchTests = (allTests: Array<{ provider: string; model: string; keyIndex?: number }>, persistedResults: BatchTestResult[]) => {
+  const persistedMap = new Map<string, BatchTestResult>();
+  for (const result of persistedResults) {
+    persistedMap.set(getBatchTestResultKey(result), result);
+  }
+  return allTests.map(({ provider, model, keyIndex }) => {
+    const key = getBatchTestResultKey({ provider, model, keyIndex });
+    return persistedMap.get(key) || { provider, model, ...(keyIndex !== undefined ? { keyIndex } : {}), status: "idle" as const };
+  });
+};
+
+const buildFreshBatchTests = (allTests: Array<{ provider: string; model: string; keyIndex?: number }>) => {
+  return allTests.map(({ provider, model, keyIndex }) => ({
+    provider,
+    model,
+    ...(keyIndex !== undefined ? { keyIndex } : {}),
+    status: "idle" as const,
+  }));
+};
+
+const filterRemovedBatchTestResult = (
+  results: BatchTestResult[],
+  provider: string,
+  model: string
+) => results.filter(result => !(result.provider === provider && result.model === model));
+
+const filterRemovedBatchTestResults = (
+  results: BatchTestResult[],
+  provider: string,
+  models: string[]
+) => {
+  const removedModelSet = new Set(models);
+  return results.filter(result => !(result.provider === provider && removedModelSet.has(result.model)));
+};
+
 // Model data from /v1/models endpoint
 interface ModelData {
   id: string;
@@ -97,7 +163,7 @@ export function Providers({
     try {
       const status = await api.getBatchTestStatus();
       if (status.results?.length > 0) {
-        setBatchTestResults(status.results);
+        setBatchTestResults(prev => mergeBatchTestResults(prev, status.results));
       }
       if (status.startedAt !== undefined) {
         setBatchTestStartedAt(status.startedAt);
@@ -130,7 +196,7 @@ export function Providers({
   useEffect(() => {
     api.getBatchTestStatus().then(status => {
       if (status.results?.length > 0) {
-        setBatchTestResults(status.results);
+        setBatchTestResults(prev => mergeBatchTestResults(prev, status.results));
       }
       if (status.concurrency) {
         setBatchTestConcurrency(status.concurrency);
@@ -977,6 +1043,8 @@ export function Providers({
       ...(t.keyIndex !== undefined ? { keyIndex: t.keyIndex } : {}),
     }));
 
+    setBatchTestResults(prev => markBatchTestsAsTesting(prev, selectedTests));
+
     try {
       const result = await api.startBatchTest(tests, batchTestConcurrency);
       if (result.success) {
@@ -999,7 +1067,12 @@ export function Providers({
       } else {
         showToast(err.message || t("batch_test.start_failed"), 'error', 5000);
       }
+      await pollBatchTestStatus();
     }
+  };
+
+  const handleRetrySingleBatchTest = async (test: BatchTestResult) => {
+    await handleRunBatchTests([test]);
   };
 
   const handleCancelBatchTest = async () => {
@@ -1059,40 +1132,19 @@ export function Providers({
     try {
       const data = await api.getBatchTestResults();
       if (data?.results?.length > 0) {
-        // Merge persisted results with current providers
-        const persistedMap = new Map<string, BatchTestResult>();
-        for (const r of data.results) {
-          const pk = r.keyIndex !== undefined ? `${r.provider}-${r.model}-key${r.keyIndex}` : `${r.provider}-${r.model}`;
-          persistedMap.set(pk, r);
-        }
-        // Use persisted result if exists, otherwise create idle
-        const mergedResults: BatchTestResult[] = allTests.map(({ provider, model, keyIndex }) => {
-          const pk = keyIndex !== undefined ? `${provider}-${model}-key${keyIndex}` : `${provider}-${model}`;
-          return persistedMap.get(pk) || { provider, model, ...(keyIndex !== undefined ? { keyIndex } : {}), status: "idle" as const };
-        });
+        const mergedResults = mergePersistedBatchTests(allTests, data.results);
         setBatchTestResults(mergedResults);
         if (data.startedAt) setBatchTestStartedAt(data.startedAt);
         if (data.completedAt) setBatchTestCompletedAt(data.completedAt);
       } else {
-        // No persisted results, create fresh idle results
-        const freshResults: BatchTestResult[] = allTests.map(({ provider, model, keyIndex }) => ({
-          provider,
-          model,
-          ...(keyIndex !== undefined ? { keyIndex } : {}),
-          status: "idle" as const,
-        }));
+        const freshResults = buildFreshBatchTests(allTests);
         setBatchTestResults(freshResults);
         setBatchTestStartedAt(null);
         setBatchTestCompletedAt(null);
       }
     } catch {
       // Failed to load persisted results, create fresh idle results
-      const freshResults: BatchTestResult[] = allTests.map(({ provider, model, keyIndex }) => ({
-        provider,
-        model,
-        ...(keyIndex !== undefined ? { keyIndex } : {}),
-        status: "idle" as const,
-      }));
+      const freshResults = buildFreshBatchTests(allTests);
       setBatchTestResults(freshResults);
       setBatchTestStartedAt(null);
       setBatchTestCompletedAt(null);
@@ -1959,6 +2011,7 @@ export function Providers({
         results={batchTestResults}
         title={t("batch_test.title")}
         onRunTests={handleRunBatchTests}
+        onRetryTest={handleRetrySingleBatchTest}
         onCancel={handleCancelBatchTest}
         isRunning={isBatchTesting}
         concurrency={batchTestConcurrency}
@@ -1999,7 +2052,10 @@ export function Providers({
         }}
         showToast={showToast}
         onModelRemoved={(provider, model) => {
-          setBatchTestResults(prev => prev.filter(r => !(r.provider === provider && r.model === model)));
+          setBatchTestResults(prev => filterRemovedBatchTestResult(prev, provider, model));
+        }}
+        onFailedModelsRemoved={(provider, models) => {
+          setBatchTestResults(prev => filterRemovedBatchTestResults(prev, provider, models));
         }}
       />
     </Card>

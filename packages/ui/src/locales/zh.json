@@ -424,6 +424,7 @@
     "selected": "已选择 {{count}} 个",
     "close": "关闭",
     "run_selected": "运行选中的测试",
+    "retry": "重试",
     "success_status": "成功",
     "failed_status": "失败",
     "testing_status": "测试中...",
@@ -465,7 +466,9 @@
       "cancel": "取消",
       "confirm": "确认移除"
     },
-    "model_removed": "已从供应商 \"{{provider}}\" 中移除模型 \"{{model}}\""
+    "model_removed": "已从供应商 \"{{provider}}\" 中移除模型 \"{{model}}\"",
+    "remove_failed_models": "移除失败模型",
+    "failed_models_removed": "已从供应商 \"{{provider}}\" 中移除 {{count}} 个失败模型"
   },
   "settings": {
     "no_auth": "无认证（禁用身份验证）",
