@@ -77,6 +77,7 @@ export function Providers({
   const [showModelSelectDialog, setShowModelSelectDialog] = useState<boolean>(false);
   const [modelFetchError, setModelFetchError] = useState<string | null>(null);
   const [modelSearchTerm, setModelSearchTerm] = useState<string>("");
+  const [targetKeyIndex, setTargetKeyIndex] = useState<number>(0); // Which key to add models to
 
   // NewAPI assignment state
   const [showNewApiAssignment, setShowNewApiAssignment] = useState<boolean>(false);
@@ -832,6 +833,7 @@ export function Providers({
           });
           setSelectedModels(preSelected);
 
+          setTargetKeyIndex(0); // Initialize to first key
           setShowModelSelectDialog(true);
         } else {
           throw new Error("Invalid response format from /v1/models");
@@ -914,32 +916,35 @@ export function Providers({
 
   // Confirm model selection and add to provider
   const handleConfirmModelSelection = () => {
-    // Calculate new models to add before state updates
-    const existingModels = editingProviderData?.models || [];
-    const newModels = Array.from(selectedModels).filter(id => !existingModels.includes(id));
+    if (selectedModels.size === 0) return;
 
-    if (newModels.length > 0) {
-      // Use functional update to ensure we have the latest state
-      setEditingProviderData(prev => {
-        if (!prev) return prev;
+    setEditingProviderData(prev => {
+      if (!prev) return prev;
 
-        const prevModels = Array.isArray(prev.models) ? [...prev.models] : [];
-        const modelsToAdd = Array.from(selectedModels).filter(id => !prevModels.includes(id));
+      const rawKeys = Array.isArray(prev.api_key) ? [...prev.api_key] : [prev.api_key];
+      const modelsToAdd = Array.from(selectedModels);
 
-        if (modelsToAdd.length > 0) {
-          return {
-            ...prev,
-            models: [...prevModels, ...modelsToAdd]
-          };
-        }
-        return prev;
-      });
-      showToast(`Added ${newModels.length} model(s)`, "success");
-    }
+      // Get the target key
+      const targetKey = rawKeys[targetKeyIndex];
 
+      if (typeof targetKey === 'string') {
+        // Convert string to ApiKeyEntry with models
+        rawKeys[targetKeyIndex] = { key: targetKey, models: modelsToAdd };
+      } else if (targetKey && typeof targetKey === 'object') {
+        // Add models to existing entry
+        const existingModels = targetKey.models || [];
+        const newModels = modelsToAdd.filter(m => !existingModels.includes(m));
+        rawKeys[targetKeyIndex] = { ...targetKey, models: [...existingModels, ...newModels] };
+      }
+
+      return { ...prev, api_key: rawKeys };
+    });
+
+    const actualModelsAdded = selectedModels.size;
     setShowModelSelectDialog(false);
     setFetchedModels([]);
     setSelectedModels(new Set());
+    showToast(`Added ${actualModelsAdded} model(s) to Key #${targetKeyIndex + 1}`, "success");
   };
 
   // Cancel model selection
@@ -949,6 +954,7 @@ export function Providers({
     setSelectedModels(new Set());
     setModelFetchError(null);
     setModelSearchTerm("");
+    setTargetKeyIndex(0); // Reset to first key
   };
 
   // Filter models based on search term
@@ -1409,7 +1415,17 @@ export function Providers({
                 )}
               </div>
               <div className="space-y-2">
-                <Label>{t("providers.models")} (computed from all keys)</Label>
+                <div className="flex items-center justify-between">
+                  <Label>{t("providers.models")} (computed from all keys)</Label>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleFetchModels}
+                    disabled={isFetchingModels}
+                  >
+                    {isFetchingModels ? "..." : t('model_selector.fetch_from_endpoint')}
+                  </Button>
+                </div>
                 <div className="flex flex-wrap gap-2 pt-2" data-model-badges>
                   {computeAllKeyModelsUnion(editingProvider.api_key).map((model: string, modelIndex: number) => {
                     const status = getRequestStatus(requestStats, editingProvider.name || '', model);
@@ -1490,17 +1506,18 @@ export function Providers({
 
                 {/* Display existing transformers */}
                 {editingProvider.transformer?.use && editingProvider.transformer.use.length > 0 && (
-                  <div className="space-y-2 mt-2">
+                  <div className="space-y-1.5 mt-2">
                     <div className="text-sm font-medium text-gray-700">{t("providers.selected_transformers")}</div>
                     {editingProvider.transformer.use.map((transformer: string | (string | Record<string, unknown> | { max_tokens: number })[], transformerIndex: number) => (
-                      <div key={transformerIndex} className="border rounded-md p-3">
-                        <div className="flex gap-2 items-center mb-2">
-                          <div className="flex-1 bg-gray-50 rounded p-2 text-sm">
+                      <div key={transformerIndex} className="border rounded-md p-2">
+                        <div className="flex gap-2 items-center mb-1.5">
+                          <div className="flex-1 bg-gray-50 rounded px-2 py-1.5 text-sm leading-tight">
                             {typeof transformer === 'string' ? transformer : Array.isArray(transformer) ? String(transformer[0]) : String(transformer)}
                           </div>
-                          <Button 
-                            variant="outline" 
+                          <Button
+                            variant="outline"
                             size="icon"
+                            className="h-8 w-8"
                             onClick={() => {
                               if (editingProviderIndex !== null) {
                                 removeProviderTransformerAtIndex(editingProviderIndex, transformerIndex);
@@ -1510,14 +1527,15 @@ export function Providers({
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
-                        
+
                         {/* Transformer-specific Parameters */}
-                        <div className="mt-2 pl-4 border-l-2 border-gray-200">
-                          <Label className="text-sm">{t("providers.transformer_parameters")}</Label>
-                          <div className="space-y-2 mt-1">
+                        <div className="mt-1.5 pl-3 border-l-2 border-gray-200">
+                          <Label className="text-xs text-gray-600">{t("providers.transformer_parameters")}</Label>
+                          <div className="space-y-1.5 mt-1">
                             <div className="flex gap-2">
-                              <Input 
+                              <Input
                                 placeholder={t("providers.parameter_name")}
+                                className="h-8"
                                 value={providerParamInputs[`provider-${editingProviderIndex}-transformer-${transformerIndex}`]?.name || ""}
                                 onChange={(e) => {
                                   const key = `provider-${editingProviderIndex}-transformer-${transformerIndex}`;
@@ -1530,8 +1548,9 @@ export function Providers({
                                   }));
                                 }}
                               />
-                              <Input 
+                              <Input
                                 placeholder={t("providers.parameter_value")}
+                                className="h-8"
                                 value={providerParamInputs[`provider-${editingProviderIndex}-transformer-${transformerIndex}`]?.value || ""}
                                 onChange={(e) => {
                                   const key = `provider-${editingProviderIndex}-transformer-${transformerIndex}`;
@@ -1544,8 +1563,9 @@ export function Providers({
                                   }));
                                 }}
                               />
-                              <Button 
+                              <Button
                                 size="sm"
+                                className="h-8 px-2"
                                 onClick={() => {
                                   if (editingProviderIndex !== null) {
                                     const key = `provider-${editingProviderIndex}-transformer-${transformerIndex}`;
@@ -1563,7 +1583,7 @@ export function Providers({
                                 <Plus className="h-4 w-4" />
                               </Button>
                             </div>
-                            
+
                             {/* Display existing parameters for this transformer */}
                             {(() => {
                               // Get parameters for this specific transformer
@@ -1618,10 +1638,10 @@ export function Providers({
               {editingProvider.models && editingProvider.models.length > 0 && (
                 <div className="space-y-2">
                   <Label>{t("providers.model_transformers")}</Label>
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {(editingProvider.models || []).map((model: string, modelIndex: number) => (
-                      <div key={modelIndex} className="border rounded-md p-3">
-                        <div className="font-medium text-sm mb-2">{model}</div>
+                      <div key={modelIndex} className="border rounded-md p-2">
+                        <div className="font-medium text-sm mb-1.5">{model}</div>
                         {/* Add new transformer */}
                         <div className="flex gap-2">
                           <div className="flex-1 flex gap-2">
@@ -1642,20 +1662,21 @@ export function Providers({
                             />
                           </div>
                         </div>
-                        
+
                         {/* Display existing transformers */}
                         {editingProvider.transformer?.[model]?.use && editingProvider.transformer[model].use.length > 0 && (
-                          <div className="space-y-2 mt-2">
+                          <div className="space-y-1.5 mt-2">
                             <div className="text-sm font-medium text-gray-700">{t("providers.selected_transformers")}</div>
                             {editingProvider.transformer[model].use.map((transformer: string | (string | Record<string, unknown> | { max_tokens: number })[], transformerIndex: number) => (
-                              <div key={transformerIndex} className="border rounded-md p-3">
-                                <div className="flex gap-2 items-center mb-2">
-                                  <div className="flex-1 bg-gray-50 rounded p-2 text-sm">
+                              <div key={transformerIndex} className="border rounded-md p-2">
+                                <div className="flex gap-2 items-center mb-1.5">
+                                  <div className="flex-1 bg-gray-50 rounded px-2 py-1.5 text-sm leading-tight">
                                     {typeof transformer === 'string' ? transformer : Array.isArray(transformer) ? String(transformer[0]) : String(transformer)}
                                   </div>
-                                  <Button 
-                                    variant="outline" 
+                                  <Button
+                                    variant="outline"
                                     size="icon"
+                                    className="h-8 w-8"
                                     onClick={() => {
                                       if (editingProviderIndex !== null) {
                                         removeModelTransformerAtIndex(editingProviderIndex, model, transformerIndex);
@@ -1667,12 +1688,13 @@ export function Providers({
                                 </div>
 
                                 {/* Transformer-specific Parameters */}
-                                <div className="mt-2 pl-4 border-l-2 border-gray-200">
-                                  <Label className="text-sm">{t("providers.transformer_parameters")}</Label>
-                                  <div className="space-y-2 mt-1">
+                                <div className="mt-1.5 pl-3 border-l-2 border-gray-200">
+                                  <Label className="text-xs text-gray-600">{t("providers.transformer_parameters")}</Label>
+                                  <div className="space-y-1.5 mt-1">
                                     <div className="flex gap-2">
                                       <Input
                                         placeholder={t("providers.parameter_name")}
+                                        className="h-8"
                                         value={modelParamInputs[`model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`]?.name || ""}
                                         onChange={(e) => {
                                           const key = `model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`;
@@ -1687,6 +1709,7 @@ export function Providers({
                                       />
                                       <Input
                                         placeholder={t("providers.parameter_value")}
+                                        className="h-8"
                                         value={modelParamInputs[`model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`]?.value || ""}
                                         onChange={(e) => {
                                           const key = `model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`;
@@ -1701,6 +1724,7 @@ export function Providers({
                                       />
                                       <Button
                                         size="sm"
+                                        className="h-8 px-2"
                                         onClick={() => {
                                           if (editingProviderIndex !== null) {
                                             const key = `model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`;
@@ -1839,6 +1863,31 @@ export function Providers({
             </div>
           ) : (
             <div className="flex-grow overflow-y-auto">
+              {/* Target API Key Selector */}
+              <div className="mb-4">
+                <Label className="mb-2 block">Add to API Key:</Label>
+                <div className="flex gap-2">
+                  {(() => {
+                    const keys = Array.isArray(editingProviderData?.api_key)
+                      ? editingProviderData.api_key
+                      : [editingProviderData?.api_key || ''];
+                    return keys.map((entry, idx) => {
+                      const keyStr = typeof entry === 'string' ? entry : (entry?.key || '');
+                      const display = keyStr.length <= 10 ? '****' : `${keyStr.substring(0, 4)}...${keyStr.substring(keyStr.length - 2)}`;
+                      return (
+                        <Button
+                          key={idx}
+                          variant={targetKeyIndex === idx ? 'default' : 'outline'}
+                          onClick={() => setTargetKeyIndex(idx)}
+                          className="flex-1"
+                        >
+                          Key #{idx + 1} ({display})
+                        </Button>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
               <div className="mb-4 flex items-center gap-2 border-b pb-4">
                 <div className="relative flex-1">
                   <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
