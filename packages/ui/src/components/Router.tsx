@@ -140,6 +140,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
             emptyPlaceholder={t("router.noModelFound")}
             hoveredValue={hoveredValue}
             onItemHover={handleComboboxItemHover}
+            modal={false}
           />
         </div>
         <div className="space-y-2">
@@ -159,6 +160,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
             emptyPlaceholder={t("router.noModelFound")}
             hoveredValue={hoveredValue}
             onItemHover={handleComboboxItemHover}
+            modal={false}
           />
         </div>
         <div className="space-y-2">
@@ -178,6 +180,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
             emptyPlaceholder={t("router.noModelFound")}
             hoveredValue={hoveredValue}
             onItemHover={handleComboboxItemHover}
+            modal={false}
           />
         </div>
         <div className="space-y-2">
@@ -199,6 +202,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
                 emptyPlaceholder={t("router.noModelFound")}
                 hoveredValue={hoveredValue}
                 onItemHover={handleComboboxItemHover}
+                modal={false}
               />
             </div>
             <div className="w-48">
@@ -229,6 +233,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
             emptyPlaceholder={t("router.noModelFound")}
             hoveredValue={hoveredValue}
             onItemHover={handleComboboxItemHover}
+            modal={false}
           />
         </div>
         <div className="space-y-2">
@@ -250,6 +255,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
                 emptyPlaceholder={t("router.noModelFound")}
                 hoveredValue={hoveredValue}
                 onItemHover={handleComboboxItemHover}
+                modal={false}
               />
             </div>
             <div className="w-48">
@@ -283,6 +289,7 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
             emptyPlaceholder={t("router.noModelFound")}
             hoveredValue={hoveredValue}
             onItemHover={handleComboboxItemHover}
+            modal={false}
           />
         </div>
       </CardContent>

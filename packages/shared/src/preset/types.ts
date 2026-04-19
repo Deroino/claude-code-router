@@ -99,7 +99,6 @@ export interface ProviderConfig {
   name: string;
   api_base_url: string;
   api_key: string;
-  models: string[];
   transformer?: any;
   [key: string]: any;
 }

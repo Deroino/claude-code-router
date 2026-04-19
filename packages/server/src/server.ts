@@ -29,6 +29,7 @@ import {
 import fastifyMultipart from "@fastify/multipart";
 import AdmZip from "adm-zip";
 import { batchTestService } from "./batch-test-service";
+import { canonicalizeExternalConfig } from "@CCR/shared";
 // requestStatsService and ConfigService are imported at the top level
 
 // Helper functions to detect and handle compressed/garbled error responses
@@ -144,7 +145,7 @@ export const createServer = async (config: any): Promise<any> => {
 
   // Add endpoint to read config.json with access control
   app.get("/api/config", async (req: any, reply: any) => {
-    return await readConfigFile();
+    return canonicalizeExternalConfig(await readConfigFile());
   });
 
   app.get("/api/transformers", async (req: any, reply: any) => {
@@ -161,7 +162,7 @@ export const createServer = async (config: any): Promise<any> => {
 
   // Add endpoint to save config.json with access control
   app.post("/api/config", async (req: any, reply: any) => {
-    const newConfig = req.body;
+    const newConfig = canonicalizeExternalConfig(req.body);
 
     // Backup existing config file if it exists
     const backupPath = await backupConfigFile();

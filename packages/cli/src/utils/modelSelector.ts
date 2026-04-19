@@ -17,11 +17,16 @@ interface TransformerConfig {
   [key: string]: any;
 }
 
+interface ApiKeyEntry {
+  key: string;
+  models?: string[];
+  group?: string;
+}
+
 interface Provider {
   name: string;
   api_base_url: string;
-  api_key: string;
-  models: string[];
+  api_key: string | (string | ApiKeyEntry)[];
   transformer?: TransformerConfig;
 }
 
@@ -89,10 +94,55 @@ function saveConfig(config: Config): void {
   console.log(`${GREEN}✓ config.json updated successfully${RESET}\n`);
 }
 
+function getProviderModels(provider: Provider): string[] {
+  if (!Array.isArray(provider.api_key)) {
+    return [];
+  }
+
+  const models = new Set<string>();
+  provider.api_key.forEach((entry) => {
+    if (entry && typeof entry === 'object' && !Array.isArray(entry) && Array.isArray(entry.models)) {
+      entry.models.forEach((model) => {
+        if (model) {
+          models.add(model);
+        }
+      });
+    }
+  });
+
+  return Array.from(models);
+}
+
+function ensureFirstKeyEntry(provider: Provider): ApiKeyEntry {
+  if (!Array.isArray(provider.api_key)) {
+    provider.api_key = [{ key: provider.api_key, models: [] }];
+    return provider.api_key[0] as ApiKeyEntry;
+  }
+
+  if (provider.api_key.length === 0) {
+    const entry: ApiKeyEntry = { key: '', models: [] };
+    provider.api_key.push(entry);
+    return entry;
+  }
+
+  const firstEntry = provider.api_key[0];
+  if (typeof firstEntry === 'string') {
+    const normalized: ApiKeyEntry = { key: firstEntry, models: [] };
+    provider.api_key[0] = normalized;
+    return normalized;
+  }
+
+  if (!Array.isArray(firstEntry.models)) {
+    firstEntry.models = [];
+  }
+
+  return firstEntry;
+}
+
 function getAllModels(config: Config) {
   const models: any[] = [];
   for (const provider of config.Providers) {
-    for (const model of provider.models) {
+    for (const model of getProviderModels(provider)) {
       models.push({
         name: `${BOLDCYAN}${provider.name}${RESET} → ${CYAN} ${model}`,
         value: `${provider.name},${model}`,
@@ -276,12 +326,14 @@ async function addModelToExistingProvider(config: Config, providerName: string):
     return null;
   }
   
-  if (provider.models.includes(modelName)) {
+  const existingModels = getProviderModels(provider);
+  if (existingModels.includes(modelName)) {
     console.log(`${YELLOW}Model already exists in provider${RESET}`);
     return null;
   }
-  
-  provider.models.push(modelName);
+
+  const targetEntry = ensureFirstKeyEntry(provider);
+  targetEntry.models = [...(targetEntry.models || []), modelName];
   
   // Ask about model-specific transformers
   const addModelTransformer = await confirm({
@@ -380,8 +432,7 @@ async function addNewProvider(config: Config): Promise<ModelResult | null> {
   const newProvider: Provider = {
     name: providerName,
     api_base_url: apiBaseUrl,
-    api_key: apiKey,
-    models: models
+    api_key: [{ key: apiKey, models }]
   };
   
   // Global transformer configuration

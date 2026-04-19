@@ -1,5 +1,6 @@
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
 import type { Provider, ModelGroup } from "@/types";
+import { getProviderModelUnion } from "./providerModels";
 import { getRequestStatus } from "./requestStatus";
 
 export const GROUP_REF_PREFIX = "group:";
@@ -56,7 +57,7 @@ export function generateModelOptions(
   return providers.flatMap((provider) => {
     if (!provider) return [];
 
-    const models = Array.isArray(provider.models) ? provider.models : [];
+    const models = getProviderModelUnion(provider);
     const providerName = provider.name || "Unknown Provider";
 
     return models.map((model) => {

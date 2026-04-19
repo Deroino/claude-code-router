@@ -206,16 +206,32 @@ export function BatchTestDialog({
   const removeModelFromConfig = (currentConfig: Config, providerName: string, modelName: string): Config => {
     const newConfig = { ...currentConfig };
 
-    // 1. Remove from provider's models
+    // 1. Remove from every key assignment under the provider
     if (newConfig.Providers) {
       newConfig.Providers = newConfig.Providers.map((p) => {
-        if (p.name === providerName && p.models) {
-          return {
-            ...p,
-            models: p.models.filter((m: string) => m !== modelName)
-          };
+        if (p.name !== providerName) {
+          return p;
         }
-        return p;
+
+        const rawKeys = Array.isArray(p.api_key) ? p.api_key : [p.api_key];
+        const nextKeys = rawKeys.map((entry) => {
+          if (typeof entry === "string") {
+            return entry;
+          }
+
+          const nextModels = entry.models?.filter((m: string) => m !== modelName);
+          return {
+            ...entry,
+            ...(nextModels && nextModels.length > 0 ? { models: nextModels } : {}),
+          };
+        });
+
+        const nextApiKey = (Array.isArray(p.api_key) ? nextKeys : nextKeys[0]) as typeof p.api_key;
+
+        return {
+          ...p,
+          api_key: nextApiKey,
+        };
       });
     }
 

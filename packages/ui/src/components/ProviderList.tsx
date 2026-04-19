@@ -6,6 +6,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { api } from "@/lib/api";
 import { getRequestStatus, getRequestStatsItem } from "@/lib/requestStatus";
 import type { Provider } from "@/types";
+import { getProviderModelUnion } from "@/lib/providerModels";
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
@@ -460,7 +461,7 @@ export function ProviderList({ providers, onEdit, onRemove, showToast, removeToa
 
           const providerName = provider.name || "Unnamed Provider";
           const apiBaseUrl = provider.api_base_url || "No API URL";
-          const models = Array.isArray(provider.models) ? provider.models : [];
+          const models = getProviderModelUnion(provider);
 
           // Determine if we should show all models based on match type
           const searchTermLower = searchTerm ? searchTerm.toLowerCase() : "";

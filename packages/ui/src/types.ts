@@ -17,7 +17,6 @@ export interface Provider {
   name: string;
   api_base_url: string;
   api_key: ApiKeyConfig;
-  models: string[];
   transformer?: ProviderTransformer;
 }
 

@@ -23,6 +23,7 @@ import { ComboInput } from "@/components/ui/combo-input";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import { getRequestStatus, getStatusBadgeClasses } from "@/lib/requestStatus";
+import { getProviderModelUnion, getProviderModelUnionFromApiKey } from "@/lib/providerModels";
 import type { Provider, ApiKeyEntry, ApiKeyConfig } from "@/types";
 import { BatchTestDialog } from "./BatchTestDialog";
 import { NewApiAssignmentDialog } from "./NewApiAssignmentDialog";
@@ -293,7 +294,7 @@ export function Providers({
 
 
   const handleAddProvider = () => {
-    const newProvider: ProviderType = { name: "", api_base_url: "", api_key: "", models: [] };
+    const newProvider: ProviderType = { name: "", api_base_url: "", api_key: "" };
     setEditingProviderIndex(config.Providers.length);
     setEditingProviderData(newProvider);
     setIsNewProvider(true);
@@ -673,36 +674,6 @@ export function Providers({
     }
   };
 
-  const handleAddModel = (_index: number, model: string) => {
-    if (!model.trim()) return;
-
-    const trimmed = model.trim();
-
-    // Use functional update to ensure we always work with the latest state
-    setEditingProviderData(prev => {
-      if (!prev) return prev;
-
-      const models = Array.isArray(prev.models) ? [...prev.models] : [];
-
-      // Check if model already exists
-      if (models.includes(trimmed)) {
-        showToast(`Model "${trimmed}" already exists`, "warning");
-        return prev; // Return same reference = no re-render
-      }
-
-      models.push(trimmed);
-      showToast(`Added model: ${trimmed}`, "success", 2000);
-
-      // Scroll model badges into view after next render
-      setTimeout(() => {
-        const el = document.querySelector('[data-model-badges]');
-        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }, 100);
-
-      return { ...prev, models };
-    });
-  };
-
     const handleTemplateImport = (value: string) => {
     if (!value) return;
     try {
@@ -722,20 +693,6 @@ export function Providers({
     }
   };
 
-  const handleRemoveModel = (_providerIndex: number, modelIndex: number) => {
-    setEditingProviderData(prev => {
-      if (!prev) return prev;
-
-      const models = Array.isArray(prev.models) ? [...prev.models] : [];
-
-      if (modelIndex >= 0 && modelIndex < models.length) {
-        models.splice(modelIndex, 1);
-        return { ...prev, models };
-      }
-      return prev;
-    });
-  };
-
   const handleKeyAddModel = (keyIndex: number, model: string) => {
     if (!model.trim()) return;
 
@@ -753,8 +710,8 @@ export function Providers({
       // Then add the new model
       let newModels: string[];
       if (currentModels === null) {
-        // First time adding explicit model - start with provider models
-        newModels = [...(prev.models || [])];
+        // First explicit assignment starts from current union
+        newModels = [...computeAllKeyModelsUnion(prev.api_key)];
       } else {
         // Already has explicit models - use them
         newModels = [...currentModels];
@@ -791,19 +748,8 @@ export function Providers({
     });
   };
 
-  // Helper: compute union of all models from all keys
   const computeAllKeyModelsUnion = (apiKey: ApiKeyConfig): string[] => {
-    if (!Array.isArray(apiKey)) {
-      return [];
-    }
-
-    const union = new Set<string>();
-    apiKey.forEach((entry) => {
-      if (typeof entry !== 'string' && entry.models) {
-        entry.models.forEach((m: string) => union.add(m));
-      }
-    });
-    return Array.from(union);
+    return getProviderModelUnionFromApiKey(apiKey);
   };
 
   // Remove a model from the provider (removes from ALL keys)
@@ -890,7 +836,7 @@ export function Providers({
             }));
           }
 
-          const existingModels = editingProviderData.models || [];
+          const existingModels = getProviderModelUnion(editingProviderData);
           const preSelected = new Set<string>();
           models.forEach(m => {
             if (existingModels.includes(m.id)) {
@@ -1096,7 +1042,10 @@ export function Providers({
     // Collect all tests, expanding per-key when keys have model filters
     const allTests: Array<{ provider: string; model: string; keyIndex?: number }> = [];
     for (const provider of validProviders) {
-      if (!provider.name || !provider.models) continue;
+      if (!provider.name) continue;
+
+      const providerModels = getProviderModelUnion(provider);
+      if (providerModels.length === 0) continue;
 
       const rawKeys = Array.isArray(provider.api_key) ? provider.api_key : [provider.api_key];
       const hasPerKeyModels = rawKeys.some(
@@ -1104,20 +1053,16 @@ export function Providers({
       );
 
       if (hasPerKeyModels && rawKeys.length > 1) {
-        // Per-key testing: each key tests only its own models
         rawKeys.forEach((entry, keyIdx) => {
           const keyModels = typeof entry !== 'string' && entry?.models && entry.models.length > 0
             ? entry.models
-            : provider.models!; // Keys without filter test all models
+            : providerModels;
           for (const model of keyModels) {
-            if (provider.models!.includes(model)) {
-              allTests.push({ provider: provider.name, model, keyIndex: keyIdx });
-            }
+            allTests.push({ provider: provider.name, model, keyIndex: keyIdx });
           }
         });
       } else {
-        // Standard: all models, no specific key
-        for (const model of provider.models) {
+        for (const model of providerModels) {
           allTests.push({ provider: provider.name, model });
         }
       }
@@ -1165,23 +1110,21 @@ export function Providers({
     ) {
       return true;
     }
-    // Check models
-    if (provider.models && Array.isArray(provider.models)) {
-      return provider.models.some(model =>
-        model && model.toLowerCase().includes(term)
-      );
-    }
+    const providerModels = getProviderModelUnion(provider);
+    return providerModels.some(model =>
+      model && model.toLowerCase().includes(term)
+    );
     return false;
   });
 
   // Sort providers by total success count (descending)
   const sortedProviders = [...filteredProviders].sort((a, b) => {
-    const aTotal = (a.models || []).reduce((sum, model) => {
+    const aTotal = getProviderModelUnion(a).reduce((sum, model) => {
       const stats = requestStats?.find(s => s.provider === a.name && s.model === model);
       return sum + (stats?.success || 0);
     }, 0);
 
-    const bTotal = (b.models || []).reduce((sum, model) => {
+    const bTotal = getProviderModelUnion(b).reduce((sum, model) => {
       const stats = requestStats?.find(s => s.provider === b.name && s.model === model);
       return sum + (stats?.success || 0);
     }, 0);
@@ -1388,8 +1331,8 @@ export function Providers({
                             </div>
                           );
                         })()}
-                        {/* Per-key model management - only show when there are multiple keys */}
-                        {rawKeys.length > 1 && (
+                        {/* Per-key model management - always show, click + to add to this specific key */}
+                        {(
                           <div className="pl-2 space-y-2 border-t pt-2 mt-2">
                             <Label className="text-xs text-muted-foreground">
                               Key Models (click + to add, X to remove)
@@ -1687,11 +1630,11 @@ export function Providers({
               </div>
               
               {/* Model-specific Transformers */}
-              {editingProvider.models && editingProvider.models.length > 0 && (
+              {getProviderModelUnion(editingProvider).length > 0 && (
                 <div className="space-y-2">
                   <Label>{t("providers.model_transformers")}</Label>
                   <div className="space-y-2">
-                    {(editingProvider.models || []).map((model: string, modelIndex: number) => (
+                    {getProviderModelUnion(editingProvider).map((model: string, modelIndex: number) => (
                       <div key={modelIndex} className="border rounded-md p-2">
                         <div className="font-medium text-sm mb-1.5">{model}</div>
                         {/* Add new transformer */}
@@ -1894,7 +1837,7 @@ export function Providers({
           pricingData={newApiPricingData}
           apiKeys={Array.isArray(editingProviderData.api_key) ? editingProviderData.api_key : [editingProviderData.api_key || '']}
           apiBaseUrl={editingProviderData.api_base_url || ''}
-          existingModels={editingProviderData.models || []}
+          existingModels={getProviderModelUnion(editingProviderData)}
           onConfirm={handleNewApiAssignmentConfirm}
           showToast={showToast as any}
         />

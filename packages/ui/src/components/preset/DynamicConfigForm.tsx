@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Loader2 } from 'lucide-react';
+import { getProviderModelUnion } from '@/lib/providerModels';
 
 // Type definitions
 interface InputOption {
@@ -55,7 +56,6 @@ interface PresetConfigSection {
   Providers?: Array<{
     name: string;
     api_base_url?: string;
-    models?: string[];
     [key: string]: any;
   }>;
   [key: string]: any;
@@ -186,11 +186,11 @@ export function DynamicConfigForm({
         (p) => p.name === selectedProvider || p.id === selectedProvider
       );
 
-      if (!provider || !provider.models) {
+      if (!provider) {
         return [];
       }
 
-      return provider.models.map((model: string) => ({
+      return getProviderModelUnion(provider as any).map((model: string) => ({
         label: model,
         value: model,
       }));

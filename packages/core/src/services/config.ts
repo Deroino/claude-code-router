@@ -3,6 +3,7 @@ import { join } from "path";
 import { config } from "dotenv";
 import JSON5 from 'json5';
 import { EventEmitter } from 'events';
+import { canonicalizeExternalConfig } from "@CCR/shared";
 import {
   isGroupReference,
   parseGroupReference,
@@ -35,6 +36,21 @@ export interface ConfigValidationResult {
 export type ConfigChangeListener = (newConfig: AppConfig) => void;
 export type ConfigErrorListener = (error: Error, oldConfig: AppConfig) => void;
 
+function getProviderModelsFromApiKeys(provider: any): string[] {
+  if (!provider || !Array.isArray(provider.api_key)) {
+    return [];
+  }
+
+  const models = new Set<string>();
+  provider.api_key.forEach((entry: any) => {
+    if (entry && typeof entry === "object" && !Array.isArray(entry) && Array.isArray(entry.models)) {
+      entry.models.filter(Boolean).forEach((model: string) => models.add(model));
+    }
+  });
+
+  return Array.from(models);
+}
+
 function providerModelExists(providers: any[], value: string): boolean {
   const parsed = parseProviderModel(value);
   if (!parsed) {
@@ -42,7 +58,7 @@ function providerModelExists(providers: any[], value: string): boolean {
   }
 
   const provider = providers.find((item) => item?.name === parsed.provider);
-  return !!provider && Array.isArray(provider.models) && provider.models.includes(parsed.model);
+  return !!provider && getProviderModelsFromApiKeys(provider).includes(parsed.model);
 }
 
 function validateModelRouteValue(
@@ -79,11 +95,10 @@ function validateModelRouteValue(
 }
 
 function validateConfigSemantics(parsed: AppConfig): string | null {
-  const providers = Array.isArray(parsed.Providers)
-    ? parsed.Providers
-    : Array.isArray(parsed.providers)
-      ? parsed.providers
-      : [];
+  const normalized = canonicalizeExternalConfig(parsed) as AppConfig;
+  const providers = Array.isArray(normalized.Providers)
+    ? normalized.Providers
+    : [];
 
   const modelGroups = parsed.ModelGroups;
   const groupNames = new Set<string>();
@@ -298,7 +313,8 @@ export class ConfigService extends EventEmitter {
         };
       }
 
-      const semanticError = validateConfigSemantics(parsed as AppConfig);
+      const normalized = canonicalizeExternalConfig(parsed as AppConfig) as AppConfig;
+      const semanticError = validateConfigSemantics(normalized);
       if (semanticError) {
         return {
           valid: false,
@@ -308,7 +324,7 @@ export class ConfigService extends EventEmitter {
 
       return {
         valid: true,
-        config: parsed as AppConfig
+        config: normalized
       };
     } catch (error) {
       return {

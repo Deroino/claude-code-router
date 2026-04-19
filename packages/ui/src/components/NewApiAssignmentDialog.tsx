@@ -179,18 +179,13 @@ export function NewApiAssignmentDialog({
     const loadingStates: Record<number, boolean> = {};
     const errorStates: Record<number, string | null> = {};
 
-    // Build a map of provider-level existing models
     const providerModelSet = new Set(existingModels);
 
     keys.forEach((entry, idx) => {
-      // Get existing models from ApiKeyEntry if available
       if (typeof entry === "object" && entry?.models && entry.models.length > 0) {
         initialAssignments[idx] = entry.models || [];
-      } else if (providerModelSet.size > 0) {
-        // If no key-specific models but provider has models, use those
-        initialAssignments[idx] = Array.from(providerModelSet);
       } else {
-        initialAssignments[idx] = [];
+        initialAssignments[idx] = Array.from(providerModelSet);
       }
       loadingStates[idx] = false;  // Start with loading=false
       errorStates[idx] = null;
