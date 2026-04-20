@@ -732,22 +732,21 @@ export const createServer = async (config: any): Promise<any> => {
     }
     }
 
-    // Step 2: Standard /v1/models fetch
-    if (!api_key) {
-      reply.status(400).send({ success: false, error: "api_key is required for /v1/models" });
-      return;
-    }
-
+    // Step 2: Standard /v1/models fetch (api_key optional — some public endpoints don't require auth)
     try {
       const modelsController = new AbortController();
       const modelsTimeout = setTimeout(() => modelsController.abort(), 10000);
 
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (api_key) {
+        headers['Authorization'] = `Bearer ${api_key}`;
+      }
+
       const fetchOptions: RequestInit = {
         method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${api_key}`,
-          'Content-Type': 'application/json',
-        },
+        headers,
         signal: modelsController.signal,
       };
       if (httpsProxy) {

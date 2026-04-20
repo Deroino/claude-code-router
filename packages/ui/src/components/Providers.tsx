@@ -784,9 +784,9 @@ export function Providers({
 
     const { api_base_url, api_key } = editingProviderData;
 
-    // Validate required fields
-    if (!api_base_url || !api_key) {
-      showToast("Please fill in API Base URL and API Key first", "error");
+    // Validate required fields (api_key is optional — some free/public endpoints don't require auth)
+    if (!api_base_url) {
+      showToast("Please fill in API Base URL first", "error");
       return;
     }
 
@@ -824,8 +824,9 @@ export function Providers({
       if (result.type === 'models' && result.data) {
         const data = result.data;
 
-        // Parse response - handle standard OpenAI format
-        if (data.object === 'list' && Array.isArray(data.data)) {
+        // Parse response - accept any payload that contains data array
+        // (OpenAI spec uses object === 'list', but many compatible endpoints omit it)
+        if (Array.isArray(data.data)) {
           const models: ModelData[] = data.data;
           setFetchedModels(models);
 
