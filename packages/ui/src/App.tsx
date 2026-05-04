@@ -109,7 +109,7 @@ function App() {
   }, []);
 
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
-  const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'error' | 'warning' | 'info'; duration?: number }[]>([]);
+  const [toasts, setToasts] = useState<{ id: string; message: string; type: 'success' | 'error' | 'warning' | 'info'; duration?: number; exiting?: boolean }[]>([]);
   // 版本检查状态
   const [isNewVersionAvailable, setIsNewVersionAvailable] = useState(false);
   const [isUpdateDialogOpen, setIsUpdateDialogOpen] = useState(false);
@@ -119,16 +119,33 @@ function App() {
   const [isUpdateFeatureAvailable, setIsUpdateFeatureAvailable] = useState(true);
   const hasAutoCheckedUpdate = useRef(false);
 
+  // Maximum number of *visible* (non-exiting) toasts on screen at once.
+  // Anything older than this gets flagged as `exiting` so it plays the same
+  // exit animation as a regular dismissal instead of vanishing instantly.
+  const TOAST_VISIBLE_LIMIT = 5;
+
   // Show toast function with max limit
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'warning' | 'info', duration?: number) => {
     const id = Date.now() + Math.random().toString(36).substring(2);
     setToasts(prev => {
-      // Keep only the last 4 toasts, remove oldest if exceeds limit
-      const newToasts = [...prev, { id, message, type, duration }];
-      if (newToasts.length > 5) {
-        return newToasts.slice(-5);
+      const next = [...prev, { id, message, type, duration }];
+      // Count only toasts that are still in their "visible" lifecycle —
+      // toasts already mid-exit-animation don't count toward the limit.
+      const visibleCount = next.filter(t => !t.exiting).length;
+      if (visibleCount > TOAST_VISIBLE_LIMIT) {
+        let toEvict = visibleCount - TOAST_VISIBLE_LIMIT;
+        // Evict the oldest non-exiting toasts first by flipping their
+        // `exiting` flag. The Toast component will react, play the slide-out
+        // animation, then call `removeToast` to drop it from the array.
+        return next.map(t => {
+          if (toEvict > 0 && !t.exiting) {
+            toEvict--;
+            return { ...t, exiting: true };
+          }
+          return t;
+        });
       }
-      return newToasts;
+      return next;
     });
     return id;
   }, []);
@@ -818,13 +835,14 @@ function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
+      <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none max-h-[calc(100vh-2rem)] overflow-hidden">
         {toasts.map(toast => (
           <Toast
             key={toast.id}
             message={toast.message}
             type={toast.type}
             duration={toast.duration}
+            exiting={toast.exiting}
             onClose={() => removeToast(toast.id)}
           />
         ))}

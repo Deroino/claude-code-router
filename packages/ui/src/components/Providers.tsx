@@ -1118,19 +1118,30 @@ export function Providers({
     return false;
   });
 
-  // Sort providers by total success count (descending)
+  // Sort providers:
+  // 1. Providers with no models go to the bottom.
+  // 2. Otherwise sort by the number of models whose last request status is
+  //    "success" (green badge), in descending order.
   const sortedProviders = [...filteredProviders].sort((a, b) => {
-    const aTotal = getProviderModelUnion(a).reduce((sum, model) => {
-      const stats = requestStats?.find(s => s.provider === a.name && s.model === model);
-      return sum + (stats?.success || 0);
-    }, 0);
+    const aModels = getProviderModelUnion(a);
+    const bModels = getProviderModelUnion(b);
 
-    const bTotal = getProviderModelUnion(b).reduce((sum, model) => {
-      const stats = requestStats?.find(s => s.provider === b.name && s.model === model);
-      return sum + (stats?.success || 0);
-    }, 0);
+    const aEmpty = aModels.length === 0;
+    const bEmpty = bModels.length === 0;
+    if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
 
-    return bTotal - aTotal; // Descending order
+    const aLastSuccess = aModels.reduce(
+      (sum, model) =>
+        sum + (getRequestStatus(requestStats, a.name, model) === "success" ? 1 : 0),
+      0
+    );
+    const bLastSuccess = bModels.reduce(
+      (sum, model) =>
+        sum + (getRequestStatus(requestStats, b.name, model) === "success" ? 1 : 0),
+      0
+    );
+
+    return bLastSuccess - aLastSuccess; // Descending order
   });
 
   return (
