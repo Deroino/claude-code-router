@@ -13,6 +13,11 @@ import { ProviderService } from "@/services/provider";
 import { TransformerService } from "@/services/transformer";
 import { Transformer } from "@/types/transformer";
 import { requestStatsService } from "@/services/requestStats";
+import {
+  ensureClaudeCodeAnthropicHeaders,
+  isClaudeCodeMessagesRequest,
+  mergeClaudeCodeRequestQuery,
+} from "@/utils/claude-code";
 
 // Extend FastifyInstance to include custom services
 declare module "fastify" {
@@ -305,6 +310,60 @@ function shouldBypassTransformers(
   );
 }
 
+function sanitizeRequestHeaders(
+  headers: Record<string, unknown>
+): Record<string, string> {
+  const disabledHeaderNames = new Set<string>();
+
+  for (const [key, value] of Object.entries(headers)) {
+    if (
+      value === undefined ||
+      value === null ||
+      value === "undefined" ||
+      (key.toLowerCase() === "authorization" &&
+        typeof value === "string" &&
+        value.includes("undefined"))
+    ) {
+      disabledHeaderNames.add(key.toLowerCase());
+    }
+  }
+
+  const result: Record<string, string> = {};
+  const headerKeyByLowerName = new Map<string, string>();
+
+  const setHeader = (key: string, value: string) => {
+    const lowerKey = key.toLowerCase();
+    const existingKey = headerKeyByLowerName.get(lowerKey);
+    if (existingKey) {
+      delete result[existingKey];
+    }
+    headerKeyByLowerName.set(lowerKey, key);
+    result[key] = value;
+  };
+
+  for (const [key, value] of Object.entries(headers)) {
+    if (disabledHeaderNames.has(key.toLowerCase())) {
+      continue;
+    }
+
+    if (Array.isArray(value)) {
+      const joinedValue = value
+        .filter((item) => typeof item === "string" && item)
+        .join(",");
+      if (joinedValue) {
+        setHeader(key, joinedValue);
+      }
+      continue;
+    }
+
+    if (typeof value === "string" && value) {
+      setHeader(key, value);
+    }
+  }
+
+  return result;
+}
+
 /**
  * Send request to LLM provider
  * Handle authentication, build request config, send request and handle errors
@@ -318,7 +377,15 @@ async function sendRequestToProvider(
   transformer: any,
   context: any
 ) {
-  const url = config.url || new URL(provider.baseUrl);
+  let url = config.url || new URL(provider.baseUrl);
+  const shouldApplyClaudeCodeAnthropicCompat =
+    bypass &&
+    transformer?.name === "Anthropic" &&
+    isClaudeCodeMessagesRequest(
+      context?.req?.url,
+      context?.req?.headers as Record<string, unknown>,
+      context?.req?.body as Record<string, any>
+    );
 
   // Resolve API key with model-aware rotation and health filtering
   const resolvedKey = fastify.providerService.getApiKey(
@@ -359,22 +426,16 @@ async function sendRequestToProvider(
     }
   }
 
+  if (shouldApplyClaudeCodeAnthropicCompat) {
+    url = mergeClaudeCodeRequestQuery(url, context?.req?.url);
+    config.headers = ensureClaudeCodeAnthropicHeaders(config.headers);
+  }
+
   // Send HTTP request - build headers with the resolved API key
-  const requestHeaders: Record<string, string> = {
+  const requestHeaders = sanitizeRequestHeaders({
     Authorization: `Bearer ${selectedApiKey}`,
     ...(config?.headers || {}),
-  };
-
-  for (const key in requestHeaders) {
-    if (requestHeaders[key] === "undefined") {
-      delete requestHeaders[key];
-    } else if (
-      ["authorization", "Authorization"].includes(key) &&
-      requestHeaders[key]?.includes("undefined")
-    ) {
-      delete requestHeaders[key];
-    }
-  }
+  });
 
   let response = await sendUnifiedRequest(
     url,

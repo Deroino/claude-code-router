@@ -7,6 +7,7 @@ import { CLAUDE_PROJECTS_DIR, HOME_DIR } from "@CCR/shared";
 import { LRUCache } from "lru-cache";
 import { ConfigService } from "../services/config";
 import { TokenizerService } from "../services/tokenizer";
+import { extractClaudeCodeSessionId } from "./claude-code";
 import {
   isGroupReference,
   parseGroupReference,
@@ -473,13 +474,7 @@ export const router = async (req: any, _res: any, context: RouterContext) => {  
   // --- ^^^ TEMPORARY DEBUGGING CODE ^^^ ---
 
   const { configService, event } = context;
-  // Parse sessionId from metadata.user_id
-  if (req.body.metadata?.user_id) {
-    const parts = req.body.metadata.user_id.split("_session_");
-    if (parts.length > 1) {
-      req.sessionId = parts[1];
-    }
-  }
+  req.sessionId = extractClaudeCodeSessionId(req.body.metadata?.user_id);
   const lastMessageUsage = sessionUsageCache.get(req.sessionId);
   const { messages, system = [], tools }: MessageCreateParamsBase = req.body;
   const rewritePrompt = configService.get("REWRITE_SYSTEM_PROMPT");

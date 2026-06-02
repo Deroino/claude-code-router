@@ -3,6 +3,7 @@ import { CCRPlugin, CCRPluginOptions } from './types';
 import { SSEParserTransform } from '../utils/sse';
 import { OutputHandlerConfig, OutputOptions, outputManager } from './output';
 import { ITokenizer, TokenizerConfig } from '../types/tokenizer';
+import { extractClaudeCodeSessionId } from '../utils/claude-code';
 
 /**
  * Token statistics interface
@@ -175,10 +176,7 @@ export const tokenSpeedPlugin: CCRPlugin = {
       let sessionId: string | undefined;
       try {
         const userId = (request.body as any)?.metadata?.user_id;
-        if (userId && typeof userId === 'string') {
-          const match = userId.match(/_session_([a-f0-9-]+)/i);
-          sessionId = match ? match[1] : undefined;
-        }
+        sessionId = extractClaudeCodeSessionId(userId);
       } catch (error) {
       }
       if (!sessionId) return;

@@ -189,11 +189,15 @@ export class AnthropicTransformer implements Transformer {
       tool_choice: request.tool_choice,
     };
     if (request.thinking) {
+      const budgetTokens = request.thinking.budget_tokens;
       result.reasoning = {
-        effort: getThinkLevel(request.thinking.budget_tokens),
         // max_tokens: request.thinking.budget_tokens,
-        enabled: request.thinking.type === "enabled",
+        enabled: request.thinking.type !== "disabled",
       };
+      if (typeof budgetTokens === "number") {
+        result.reasoning.effort = getThinkLevel(budgetTokens);
+        result.reasoning.max_tokens = budgetTokens;
+      }
     }
     if (request.tool_choice) {
       if (request.tool_choice.type === "tool") {
