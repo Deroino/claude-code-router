@@ -107,10 +107,31 @@ export class RequestStatsService extends EventEmitter {
   }
 
   clearAll(): void {
+    this.ensurePersistence();
     this.stats.clear();
     this.dirty = true;
     this.saveToFile(); // immediate save on clear
     this.emit('stats_clear');
+  }
+
+  clearProvider(provider: string): number {
+    this.ensurePersistence();
+
+    let removed = 0;
+    for (const key of Array.from(this.stats.keys())) {
+      if (parseStatsKey(key).provider === provider) {
+        this.stats.delete(key);
+        removed += 1;
+      }
+    }
+
+    if (removed > 0) {
+      this.dirty = true;
+      this.saveToFile();
+      this.emit('stats_provider_clear', { provider });
+    }
+
+    return removed;
   }
 
   // --- Per-key statistics methods ---

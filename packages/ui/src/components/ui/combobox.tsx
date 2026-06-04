@@ -90,9 +90,26 @@ export function Combobox({
   modal = true,
 }: ComboboxProps) {
   const [open, setOpen] = React.useState(false)
+  const [search, setSearch] = React.useState("")
+  const listRef = React.useRef<React.ElementRef<typeof CommandList>>(null)
 
   const selectedOption = options.find((option) => option.value === value)
   const isHovered = hoveredValue && value === hoveredValue
+
+  React.useEffect(() => {
+    if (!open) return;
+    requestAnimationFrame(() => {
+      listRef.current?.scrollTo({ top: 0 });
+    });
+  }, [open, search]);
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) {
+      setSearch("");
+      onItemHover?.(null);
+    }
+  };
 
   // Get status-based background class for dropdown items
   const getStatusClass = (status?: 'success' | 'error' | 'neutral') => {
@@ -119,7 +136,7 @@ export function Combobox({
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen} modal={modal}>
+    <Popover open={open} onOpenChange={handleOpenChange} modal={modal}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -138,8 +155,12 @@ export function Combobox({
       </PopoverTrigger>
       <PopoverContent className="w-[--radix-popover-trigger-width] p-0 animate-fade-in pointer-events-auto">
         <Command filter={createCustomFilter(options)}>
-          <CommandInput placeholder={searchPlaceholder} />
-          <CommandList>
+          <CommandInput
+            placeholder={searchPlaceholder}
+            value={search}
+            onValueChange={setSearch}
+          />
+          <CommandList ref={listRef}>
             <CommandEmpty>{emptyPlaceholder}</CommandEmpty>
             <CommandGroup>
               {options.map((option) => (
@@ -150,7 +171,7 @@ export function Combobox({
                   onMouseLeave={() => onItemHover?.(null)}
                   onSelect={(currentValue) => {
                     onChange(currentValue === value ? "" : currentValue)
-                    setOpen(false)
+                    handleOpenChange(false)
                   }}
                   className={cn(
                     "transition-all-ease",

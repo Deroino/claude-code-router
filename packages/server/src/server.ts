@@ -58,6 +58,46 @@ function replaceCompressedError(text: string, provider: string, model: string, s
   };
 }
 
+function serializeRequestStatsItem(key: string, value: any, includeDetails = false) {
+  const parsed = parseStatsKey(key);
+  const lastSuccessAt = value?.lastSuccessRequest?.timestamp;
+  const lastFailureAt = value?.lastFailureRequest?.timestamp;
+
+  return {
+    key,
+    provider: parsed.provider,
+    model: parsed.model,
+    ...(parsed.keyIndex !== undefined ? { keyIndex: parsed.keyIndex } : {}),
+    success: value?.success || 0,
+    fail: value?.fail || 0,
+    lastSuccessAt,
+    lastFailureAt,
+    lastFailureStatusCode: value?.lastFailureRequest?.statusCode,
+    lastSuccessRequest: includeDetails
+      ? value?.lastSuccessRequest
+      : lastSuccessAt
+        ? { timestamp: lastSuccessAt }
+        : undefined,
+    lastFailureRequest: includeDetails
+      ? value?.lastFailureRequest
+      : lastFailureAt
+        ? {
+            timestamp: lastFailureAt,
+            statusCode: value?.lastFailureRequest?.statusCode,
+          }
+        : undefined,
+    lastRequest: includeDetails ? value?.lastRequest : undefined,
+  };
+}
+
+function serializeRequestStatsMap(allStats: Map<string, any>, includeDetails = false) {
+  const statsArray: any[] = [];
+  allStats.forEach((value: any, key: string) => {
+    statsArray.push(serializeRequestStatsItem(key, value, includeDetails));
+  });
+  return statsArray;
+}
+
 export const createServer = async (config: any): Promise<any> => {
   const server = new Server(config);
   const app = server.app;
@@ -1445,23 +1485,40 @@ export const createServer = async (config: any): Promise<any> => {
   // Get request stats
   app.get("/api/request-stats", async (req: any, reply: any) => {
     try {
-      // requestStatsService is imported at the top level
       const allStats = requestStatsService.getAllStats() as Map<string, any>;
-      const statsArray: Array<{ key: string; provider: string; model: string; keyIndex?: number; success: number; fail: number; lastRequest?: any }> = [];
-      allStats.forEach((value: any, key: string) => {
-        const parsed = parseStatsKey(key);
-        statsArray.push({
-          key,
-          provider: parsed.provider,
-          model: parsed.model,
-          ...(parsed.keyIndex !== undefined ? { keyIndex: parsed.keyIndex } : {}),
-          ...value
-        });
-      });
-      return { stats: statsArray };
+      return { stats: serializeRequestStatsMap(allStats) };
     } catch (error) {
       console.error("Failed to get request stats:", error);
       reply.status(500).send({ error: "Failed to get request stats" });
+    }
+  });
+
+  // Get one request stat with full request/response details.
+  app.get("/api/request-stats/detail", async (req: any, reply: any) => {
+    try {
+      const query = req.query || {};
+      const allStats = requestStatsService.getAllStats() as Map<string, any>;
+      let statsKey = typeof query.key === "string" ? query.key : "";
+      let value = statsKey ? allStats.get(statsKey) : undefined;
+
+      if (!value && typeof query.provider === "string" && typeof query.model === "string") {
+        const hasKeyIndex = query.keyIndex !== undefined && query.keyIndex !== "";
+        const parsedKeyIndex = Number(query.keyIndex);
+        statsKey = hasKeyIndex && Number.isFinite(parsedKeyIndex)
+          ? `${query.provider}:#${parsedKeyIndex}:${query.model}`
+          : `${query.provider}:${query.model}`;
+        value = allStats.get(statsKey);
+      }
+
+      if (!statsKey || !value) {
+        reply.status(404).send({ error: "Request stats not found" });
+        return;
+      }
+
+      return { stat: serializeRequestStatsItem(statsKey, value, true) };
+    } catch (error) {
+      console.error("Failed to get request stats detail:", error);
+      reply.status(500).send({ error: "Failed to get request stats detail" });
     }
   });
 
@@ -1478,7 +1535,7 @@ export const createServer = async (config: any): Promise<any> => {
     let heartbeatInterval: NodeJS.Timeout | null = null;
     let statsListener: any = null;
     let clearListener: any = null;
-    // requestStatsService is imported at the top level
+    let providerClearListener: any = null;
 
     // Send data function
     const send = (data: string) => {
@@ -1494,6 +1551,7 @@ export const createServer = async (config: any): Promise<any> => {
       if (heartbeatInterval) clearInterval(heartbeatInterval);
       if (statsListener) requestStatsService.off('stats_update', statsListener);
       if (clearListener) requestStatsService.off('stats_clear', clearListener);
+      if (providerClearListener) requestStatsService.off('stats_provider_clear', providerClearListener);
       try { res.end(); } catch (e) {}
     };
 
@@ -1506,17 +1564,7 @@ export const createServer = async (config: any): Promise<any> => {
 
     // Send initial stats
     const allStats = requestStatsService.getAllStats() as Map<string, any>;
-    const initialStats: Array<{ key: string; provider: string; model: string; keyIndex?: number; success: number; fail: number; lastRequest?: any }> = [];
-    allStats.forEach((value: any, key: string) => {
-      const parsed = parseStatsKey(key);
-      initialStats.push({
-        key,
-        provider: parsed.provider,
-        model: parsed.model,
-        ...(parsed.keyIndex !== undefined ? { keyIndex: parsed.keyIndex } : {}),
-        ...value
-      });
-    });
+    const initialStats = serializeRequestStatsMap(allStats);
 
     send(`data: ${JSON.stringify({
       type: 'initial',
@@ -1526,19 +1574,11 @@ export const createServer = async (config: any): Promise<any> => {
 
     // Listen for updates
     statsListener = (update: any) => {
-      const parsed = parseStatsKey(update.key);
       const data = {
         type: 'update',
-        data: {
-          key: update.key,
-          provider: parsed.provider,
-          model: parsed.model,
-          ...(parsed.keyIndex !== undefined ? { keyIndex: parsed.keyIndex } : {}),
-          ...update.stats
-        },
+        data: serializeRequestStatsItem(update.key, update.stats),
         timestamp: Date.now()
       };
-      console.log('[SSE] Sending stats update:', JSON.stringify(data, null, 2));
       send(`data: ${JSON.stringify(data)}\n\n`);
     };
 
@@ -1550,8 +1590,17 @@ export const createServer = async (config: any): Promise<any> => {
       })}\n\n`);
     };
 
+    providerClearListener = ({ provider }: { provider: string }) => {
+      send(`data: ${JSON.stringify({
+        type: 'provider_clear',
+        provider,
+        timestamp: Date.now()
+      })}\n\n`);
+    };
+
     requestStatsService.on('stats_update', statsListener);
     requestStatsService.on('stats_clear', clearListener);
+    requestStatsService.on('stats_provider_clear', providerClearListener);
 
     // Heartbeat every 30s
     heartbeatInterval = setInterval(() => {
@@ -1570,6 +1619,18 @@ export const createServer = async (config: any): Promise<any> => {
     } catch (error) {
       console.error("Failed to clear request stats:", error);
       reply.status(500).send({ error: "Failed to clear request stats" });
+    }
+  });
+
+  // Clear request stats for one provider
+  app.delete("/api/request-stats/provider/:provider", async (req: any, reply: any) => {
+    try {
+      const provider = decodeURIComponent(req.params.provider);
+      const removed = requestStatsService.clearProvider(provider);
+      return { success: true, removed };
+    } catch (error) {
+      console.error("Failed to clear provider request stats:", error);
+      reply.status(500).send({ error: "Failed to clear provider request stats" });
     }
   });
 
@@ -1653,6 +1714,37 @@ export const createServer = async (config: any): Promise<any> => {
     } catch (error) {
       console.error("Failed to save batch test results:", error);
       reply.status(500).send({ error: "Failed to save batch test results" });
+    }
+  });
+
+  // Batch test results persistence - DELETE all
+  app.delete("/api/batch-test-results", async (req: any, reply: any) => {
+    try {
+      const result = batchTestService.clear();
+      if (!result.success) {
+        reply.status(409).send(result);
+        return;
+      }
+      return result;
+    } catch (error) {
+      console.error("Failed to clear batch test results:", error);
+      reply.status(500).send({ success: false, error: "Failed to clear batch test results" });
+    }
+  });
+
+  // Batch test results persistence - DELETE provider results
+  app.delete("/api/batch-test-results/provider/:provider", async (req: any, reply: any) => {
+    try {
+      const provider = decodeURIComponent(req.params.provider);
+      const result = batchTestService.clearProvider(provider);
+      if (!result.success) {
+        reply.status(409).send(result);
+        return;
+      }
+      return result;
+    } catch (error) {
+      console.error("Failed to clear provider batch test results:", error);
+      reply.status(500).send({ success: false, error: "Failed to clear provider batch test results" });
     }
   });
 

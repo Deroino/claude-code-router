@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useConfig } from "./ConfigProvider";
 import { ProviderList } from "./ProviderList";
-import { useRequestStats } from "@/hooks/useRequestStats";
+import type { RequestStatsItem } from "@/hooks/useRequestStats";
 import {
   Dialog,
   DialogContent,
@@ -19,81 +19,12 @@ import {
 import { X, Trash2, Plus, Eye, EyeOff, Search, XCircle, Play, Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Combobox } from "@/components/ui/combobox";
-import { ComboInput } from "@/components/ui/combo-input";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import { getRequestStatus, getStatusBadgeClasses } from "@/lib/requestStatus";
 import { getProviderModelUnion, getProviderModelUnionFromApiKey } from "@/lib/providerModels";
 import type { Provider, ApiKeyEntry, ApiKeyConfig } from "@/types";
-import { BatchTestDialog } from "./BatchTestDialog";
 import { NewApiAssignmentDialog } from "./NewApiAssignmentDialog";
-import type { BatchTestResult } from "./BatchTestDialog";
-
-const getBatchTestResultKey = (result: { provider: string; model: string; keyIndex?: number }) => {
-  return result.keyIndex !== undefined
-    ? `${result.provider}-${result.model}-key${result.keyIndex}`
-    : `${result.provider}-${result.model}`;
-};
-
-const mergeBatchTestResults = (prev: BatchTestResult[], incoming: BatchTestResult[]) => {
-  const incomingMap = new Map(incoming.map(result => [getBatchTestResultKey(result), result]));
-  const merged = prev.map(result => incomingMap.get(getBatchTestResultKey(result)) || result);
-  const existingKeys = new Set(prev.map(result => getBatchTestResultKey(result)));
-  const appended = incoming.filter(result => !existingKeys.has(getBatchTestResultKey(result)));
-  return [...merged, ...appended];
-};
-
-const markBatchTestsAsTesting = (prev: BatchTestResult[], selectedTests: BatchTestResult[]): BatchTestResult[] => {
-  if (selectedTests.length === 0) return prev;
-  const selectedKeys = new Set(selectedTests.map(getBatchTestResultKey));
-  return prev.map(result => {
-    if (!selectedKeys.has(getBatchTestResultKey(result))) {
-      return result;
-    }
-    return {
-      ...result,
-      status: "testing" as const,
-      message: undefined,
-      response: undefined,
-      timestamp: Date.now(),
-    };
-  });
-};
-
-const mergePersistedBatchTests = (allTests: Array<{ provider: string; model: string; keyIndex?: number }>, persistedResults: BatchTestResult[]) => {
-  const persistedMap = new Map<string, BatchTestResult>();
-  for (const result of persistedResults) {
-    persistedMap.set(getBatchTestResultKey(result), result);
-  }
-  return allTests.map(({ provider, model, keyIndex }) => {
-    const key = getBatchTestResultKey({ provider, model, keyIndex });
-    return persistedMap.get(key) || { provider, model, ...(keyIndex !== undefined ? { keyIndex } : {}), status: "idle" as const };
-  });
-};
-
-const buildFreshBatchTests = (allTests: Array<{ provider: string; model: string; keyIndex?: number }>) => {
-  return allTests.map(({ provider, model, keyIndex }) => ({
-    provider,
-    model,
-    ...(keyIndex !== undefined ? { keyIndex } : {}),
-    status: "idle" as const,
-  }));
-};
-
-const filterRemovedBatchTestResult = (
-  results: BatchTestResult[],
-  provider: string,
-  model: string
-) => results.filter(result => !(result.provider === provider && result.model === model));
-
-const filterRemovedBatchTestResults = (
-  results: BatchTestResult[],
-  provider: string,
-  models: string[]
-) => {
-  const removedModelSet = new Set(models);
-  return results.filter(result => !(result.provider === provider && removedModelSet.has(result.model)));
-};
+import { buildBatchTestsForProvider, buildBatchTestsForProviders, type BatchTestTarget } from "@/lib/batchTests";
 
 // Model data from /v1/models endpoint
 interface ModelData {
@@ -107,16 +38,20 @@ interface ProviderType extends Provider {}
 
 export function Providers({
   showToast,
-  updateToast,
   removeToast,
+  requestStats,
   hoveredModel,
-  onBadgeRef
+  onBadgeRef,
+  onOpenBatchTest,
+  onProviderResultsCleared,
 }: {
   showToast: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => string;
-  updateToast: (id: string, message: string) => void;
   removeToast: (id: string) => void;
+  requestStats?: RequestStatsItem[];
   hoveredModel?: { provider: string | null; model: string | null } | null | undefined;
   onBadgeRef?: (provider: string, model: string, ref: HTMLDivElement | null) => void;
+  onOpenBatchTest: (tests: BatchTestTarget[], title?: string) => Promise<void> | void;
+  onProviderResultsCleared?: (provider: string) => void;
 }) {
   const { t } = useTranslation();
   const { config, setConfig, flushSave } = useConfig();
@@ -133,8 +68,6 @@ export function Providers({
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>("");
-  const comboInputRef = useRef<HTMLInputElement>(null);
-  const [modelInput, setModelInput] = useState<string>("");
   const [keyModelInputs, setKeyModelInputs] = useState<Record<string, string>>({});
   const [modelTransformerSearch, setModelTransformerSearch] = useState<string>("");
 
@@ -150,99 +83,6 @@ export function Providers({
   // NewAPI assignment state
   const [showNewApiAssignment, setShowNewApiAssignment] = useState<boolean>(false);
   const [newApiPricingData, setNewApiPricingData] = useState<any>(null);
-
-  // Batch test state
-  const [showBatchTestDialog, setShowBatchTestDialog] = useState<boolean>(false);
-  const [batchTestResults, setBatchTestResults] = useState<BatchTestResult[]>([]);
-  const [isBatchTesting, setIsBatchTesting] = useState<boolean>(false);
-  const [batchTestConcurrency, setBatchTestConcurrency] = useState<number>(20);
-  const [batchTestStartedAt, setBatchTestStartedAt] = useState<number | null>(null);
-  const [batchTestCompletedAt, setBatchTestCompletedAt] = useState<number | null>(null);
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Poll backend batch test status
-  const pollBatchTestStatus = useCallback(async () => {
-    try {
-      const status = await api.getBatchTestStatus();
-      if (status.results?.length > 0) {
-        setBatchTestResults(prev => mergeBatchTestResults(prev, status.results));
-      }
-      if (status.startedAt !== undefined) {
-        setBatchTestStartedAt(status.startedAt);
-      }
-      if (status.completedAt !== undefined) {
-        setBatchTestCompletedAt(status.completedAt);
-      }
-      if (status.status === 'running' || status.status === 'cancelling') {
-        setIsBatchTesting(true);
-      } else {
-        setIsBatchTesting(false);
-        // Stop polling when task is no longer running
-        if (pollTimerRef.current) {
-          clearInterval(pollTimerRef.current);
-          pollTimerRef.current = null;
-        }
-      }
-    } catch (e) {
-      console.error('Failed to poll batch test status:', e);
-    }
-  }, []);
-
-  // Start polling interval
-  const startPolling = useCallback(() => {
-    if (pollTimerRef.current) return; // Already polling
-    pollTimerRef.current = setInterval(pollBatchTestStatus, 2000);
-  }, [pollBatchTestStatus]);
-
-  // On mount: check if a batch test is running, load results
-  useEffect(() => {
-    api.getBatchTestStatus().then(status => {
-      if (status.results?.length > 0) {
-        setBatchTestResults(prev => mergeBatchTestResults(prev, status.results));
-      }
-      if (status.concurrency) {
-        setBatchTestConcurrency(status.concurrency);
-      }
-      if (status.startedAt !== undefined) {
-        setBatchTestStartedAt(status.startedAt);
-      }
-      if (status.completedAt !== undefined) {
-        setBatchTestCompletedAt(status.completedAt);
-      }
-      if (status.status === 'running' || status.status === 'cancelling') {
-        setIsBatchTesting(true);
-        setShowBatchTestDialog(true);
-        startPolling();
-      } else if (status.status === 'idle' || status.status === 'completed') {
-        // Try to load persisted results if no results from status
-        if (!status.results?.length) {
-          api.getBatchTestResults().then(data => {
-            if (data?.results?.length > 0) {
-              setBatchTestResults(data.results);
-            }
-          }).catch(() => {});
-        }
-      }
-    }).catch(e => {
-      console.error('Failed to load batch test status:', e);
-      // Fallback: try to load persisted results
-      api.getBatchTestResults().then(data => {
-        if (data?.results?.length > 0) {
-          setBatchTestResults(data.results);
-        }
-      }).catch(() => {});
-    });
-
-    return () => {
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-    };
-  }, [startPolling]);
-
-  // Get request statistics
-  const { stats: requestStats } = useRequestStats();
 
   useEffect(() => {
     const fetchProviderTemplates = async () => {
@@ -435,7 +275,7 @@ export function Providers({
   };
 
   // Handle deletion by passing the filtered index to get the actual index in the original array
-  const handleRemoveProvider = (filteredIndex: number) => {
+  const handleRemoveProvider = async (filteredIndex: number) => {
     // Find the actual index in the original providers array
     // Since providers are sorted in UI but not in config, we need to map the sorted provider back to original
     const sortedProvider = sortedProviders[filteredIndex];
@@ -446,10 +286,22 @@ export function Providers({
       return;
     }
 
+    const providerName = sortedProvider?.name;
     const newProviders = [...config.Providers];
     newProviders.splice(actualIndex, 1);
     setConfig({ ...config, Providers: newProviders });
     setDeletingProviderIndex(null);
+
+    if (providerName) {
+      onProviderResultsCleared?.(providerName);
+      const cleanupResults = await Promise.allSettled([
+        api.clearProviderBatchTestResults(providerName),
+        api.clearProviderRequestStats(providerName),
+      ]);
+      if (cleanupResults.some(result => result.status === "rejected")) {
+        showToast(t("providers.provider_removed_cleanup_failed"), "warning", 5000);
+      }
+    }
   };
 
   const handleProviderChange = (_index: number, field: string, value: string | string[] | (string | ApiKeyEntry)[]) => {
@@ -992,124 +844,32 @@ export function Providers({
       )
     : editingProviderModels;
 
-  // Batch test handlers
-  const handleRunBatchTests = async (selectedTests: BatchTestResult[]) => {
-    if (selectedTests.length === 0) return;
-
-    const tests = selectedTests.map(t => ({
-      provider: t.provider,
-      model: t.model,
-      ...(t.keyIndex !== undefined ? { keyIndex: t.keyIndex } : {}),
-    }));
-
-    setBatchTestResults(prev => markBatchTestsAsTesting(prev, selectedTests));
-
-    try {
-      const result = await api.startBatchTest(tests, batchTestConcurrency);
-      if (result.success) {
-        setIsBatchTesting(true);
-        showToast(
-          t("batch_test.started", { total: result.total, concurrency: result.concurrency }),
-          'success',
-          3000
-        );
-        // Immediately poll once to get initial state
-        await pollBatchTestStatus();
-        startPolling();
-      } else {
-        showToast(result.error || t("batch_test.start_failed"), 'error', 5000);
-      }
-    } catch (err: any) {
-      // Handle 409 Conflict (task already running)
-      if (err.status === 409) {
-        showToast(t("batch_test.already_running"), 'warning', 5000);
-      } else {
-        showToast(err.message || t("batch_test.start_failed"), 'error', 5000);
-      }
-      await pollBatchTestStatus();
-    }
-  };
-
-  const handleRetrySingleBatchTest = async (test: BatchTestResult) => {
-    await handleRunBatchTests([test]);
-  };
-
-  const handleCancelBatchTest = async () => {
-    try {
-      const result = await api.cancelBatchTest();
-      if (result.success) {
-        showToast(
-          t("batch_test.cancelled", { completed: result.completed, cancelled: result.cancelled }),
-          'warning',
-          5000
-        );
-        // Poll one more time to get final state
-        await pollBatchTestStatus();
-      }
-    } catch (err: any) {
-      showToast(err.message || t("batch_test.cancel_failed"), 'error', 5000);
-    }
-  };
-
-  const handleBatchTestAll = async () => {
-    // Collect all tests, expanding per-key when keys have model filters
-    const allTests: Array<{ provider: string; model: string; keyIndex?: number }> = [];
-    for (const provider of validProviders) {
-      if (!provider.name) continue;
-
-      const providerModels = getProviderModelUnion(provider);
-      if (providerModels.length === 0) continue;
-
-      const rawKeys = Array.isArray(provider.api_key) ? provider.api_key : [provider.api_key];
-      const hasPerKeyModels = rawKeys.some(
-        k => typeof k !== 'string' && k?.models && k.models.length > 0
-      );
-
-      if (hasPerKeyModels && rawKeys.length > 1) {
-        rawKeys.forEach((entry, keyIdx) => {
-          const keyModels = typeof entry !== 'string' && entry?.models && entry.models.length > 0
-            ? entry.models
-            : providerModels;
-          for (const model of keyModels) {
-            allTests.push({ provider: provider.name, model, keyIndex: keyIdx });
-          }
-        });
-      } else {
-        for (const model of providerModels) {
-          allTests.push({ provider: provider.name, model });
-        }
-      }
-    }
-
-    if (allTests.length === 0) {
+  const openBatchTestForTargets = (tests: BatchTestTarget[], title?: string) => {
+    if (tests.length === 0) {
       showToast(t("batch_test.no_models_to_test"), "warning");
       return;
     }
+    void onOpenBatchTest(tests, title);
+  };
 
-    // Try to load persisted results first
+  const handleBatchTestAll = () => {
+    openBatchTestForTargets(buildBatchTestsForProviders(validProviders), t("batch_test.title"));
+  };
+
+  const handleBatchTestProvider = (provider: Provider) => {
+    openBatchTestForTargets(
+      buildBatchTestsForProvider(provider),
+      t("providers.provider_batch_test_title", { provider: provider.name || t("providers.unnamed_provider") })
+    );
+  };
+
+  const handleClearRequestStats = async () => {
     try {
-      const data = await api.getBatchTestResults();
-      if (data?.results?.length > 0) {
-        const mergedResults = mergePersistedBatchTests(allTests, data.results);
-        setBatchTestResults(mergedResults);
-        if (data.startedAt) setBatchTestStartedAt(data.startedAt);
-        if (data.completedAt) setBatchTestCompletedAt(data.completedAt);
-      } else {
-        const freshResults = buildFreshBatchTests(allTests);
-        setBatchTestResults(freshResults);
-        setBatchTestStartedAt(null);
-        setBatchTestCompletedAt(null);
-      }
-    } catch {
-      // Failed to load persisted results, create fresh idle results
-      const freshResults = buildFreshBatchTests(allTests);
-      setBatchTestResults(freshResults);
-      setBatchTestStartedAt(null);
-      setBatchTestCompletedAt(null);
+      await api.clearRequestStats();
+      showToast(t("providers.clear_request_stats_success"), "success");
+    } catch (err: any) {
+      showToast(err?.message || t("providers.clear_request_stats_failed"), "error", 5000);
     }
-
-    setShowBatchTestDialog(true);
-    // Don't auto-start, let user select and run
   };
 
   // Filter providers based on search term
@@ -1127,7 +887,6 @@ export function Providers({
     return providerModels.some(model =>
       model && model.toLowerCase().includes(term)
     );
-    return false;
   });
 
   // Sort providers:
@@ -1169,6 +928,13 @@ export function Providers({
               <Play className="h-4 w-4" />
               {t("providers.test")}
             </Button>
+            <Button
+              variant="outline"
+              onClick={handleClearRequestStats}
+            >
+              <Trash2 className="h-4 w-4" />
+              {t("providers.clear_request_stats")}
+            </Button>
             <Button onClick={handleAddProvider}>{t("providers.add")}</Button>
           </div>
         </div>
@@ -1205,6 +971,7 @@ export function Providers({
           hoveredModel={hoveredModel}
           onBadgeRef={onBadgeRef}
           searchTerm={searchTerm}
+          onBatchTestProvider={handleBatchTestProvider}
         />
       </CardContent>
 
@@ -2049,60 +1816,6 @@ export function Providers({
         </DialogContent>
       </Dialog>
 
-      {/* Batch Test Results Dialog */}
-      <BatchTestDialog
-        open={showBatchTestDialog}
-        onClose={() => setShowBatchTestDialog(false)}
-        results={batchTestResults}
-        title={t("batch_test.title")}
-        onRunTests={handleRunBatchTests}
-        onRetryTest={handleRetrySingleBatchTest}
-        onCancel={handleCancelBatchTest}
-        isRunning={isBatchTesting}
-        concurrency={batchTestConcurrency}
-        onConcurrencyChange={setBatchTestConcurrency}
-        startedAt={batchTestStartedAt}
-        completedAt={batchTestCompletedAt}
-        providerApiUrls={Object.fromEntries(
-          validProviders
-            .filter(p => p.name && p.api_base_url)
-            .map(p => [p.name, p.api_base_url])
-        )}
-        onTestConnectivity={async (provider: string, url: string) => {
-          const toastId = showToast(t("provider_list.connectivity_testing", { url }), 'warning', 0);
-          try {
-            const result = await api.testConnectivity(url);
-            removeToast(toastId);
-            if (result?.success) {
-              showToast(
-                t("provider_list.connectivity_ok", { url, ms: result.latency_ms, status: result.status }),
-                'success',
-                5000
-              );
-            } else {
-              showToast(
-                t("provider_list.connectivity_fail", { url, error: result?.error || 'Unknown error' }),
-                'error',
-                8000
-              );
-            }
-          } catch (err: any) {
-            removeToast(toastId);
-            showToast(
-              t("provider_list.connectivity_fail", { url, error: err?.message || 'Network error' }),
-              'error',
-              5000
-            );
-          }
-        }}
-        showToast={showToast}
-        onModelRemoved={(provider, model) => {
-          setBatchTestResults(prev => filterRemovedBatchTestResult(prev, provider, model));
-        }}
-        onFailedModelsRemoved={(provider, models) => {
-          setBatchTestResults(prev => filterRemovedBatchTestResults(prev, provider, models));
-        }}
-      />
     </Card>
   );
 }

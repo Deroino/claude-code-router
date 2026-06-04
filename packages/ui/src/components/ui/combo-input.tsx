@@ -40,12 +40,28 @@ export const ComboInput = React.forwardRef<HTMLInputElement, ComboInputProps>(({
   inputPlaceholder = "Type or select...",
 }, ref) => {
   const [open, setOpen] = React.useState(false)
+  const [search, setSearch] = React.useState("")
   const [inputValue, setInputValue] = React.useState(value || "")
   const internalInputRef = React.useRef<HTMLInputElement>(null)
+  const listRef = React.useRef<React.ElementRef<typeof CommandList>>(null)
 
   React.useEffect(() => {
     setInputValue(value || "")
   }, [value])
+
+  React.useEffect(() => {
+    if (!open) return;
+    requestAnimationFrame(() => {
+      listRef.current?.scrollTo({ top: 0 });
+    });
+  }, [open, search]);
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) {
+      setSearch("");
+    }
+  };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value
@@ -67,7 +83,7 @@ export const ComboInput = React.forwardRef<HTMLInputElement, ComboInputProps>(({
       onEnter(selectedValue)
       setInputValue("")
     }
-    setOpen(false)
+    handleOpenChange(false)
   }
 
   // Function to get current value for external access
@@ -94,7 +110,7 @@ export const ComboInput = React.forwardRef<HTMLInputElement, ComboInputProps>(({
         placeholder={inputPlaceholder}
         className="pr-10"
       />
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={handleOpenChange}>
         <PopoverTrigger asChild>
           <Button
             variant="ghost"
@@ -106,8 +122,12 @@ export const ComboInput = React.forwardRef<HTMLInputElement, ComboInputProps>(({
         </PopoverTrigger>
         <PopoverContent className="w-[--radix-popover-trigger-width] p-0 animate-fade-in">
           <Command>
-            <CommandInput placeholder={searchPlaceholder} />
-            <CommandList>
+            <CommandInput
+              placeholder={searchPlaceholder}
+              value={search}
+              onValueChange={setSearch}
+            />
+            <CommandList ref={listRef}>
               <CommandEmpty>{emptyPlaceholder}</CommandEmpty>
               <CommandGroup>
                 {options.map((option) => (

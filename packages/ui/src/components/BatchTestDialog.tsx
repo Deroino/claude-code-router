@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Check, X, Copy, Download, Filter, Search, XCircle, Play, Square, Zap, Wifi, ChevronDown, ChevronRight, Trash2, RotateCcw } from "lucide-react";
@@ -163,6 +163,8 @@ interface BatchTestDialogProps {
   onFailedModelsRemoved?: (provider: string, models: string[]) => void;
   // Callback when retrying a single failed test
   onRetryTest?: (test: BatchTestResult) => void;
+  // Callback when clearing all persisted results
+  onClearResults?: () => Promise<void> | void;
 }
 
 export function BatchTestDialog({
@@ -183,6 +185,7 @@ export function BatchTestDialog({
   onModelRemoved,
   onFailedModelsRemoved,
   onRetryTest,
+  onClearResults,
 }: BatchTestDialogProps) {
   const { t } = useTranslation();
   const [statusFilter, setStatusFilter] = useState<"all" | "success" | "error" | "testing" | "idle">("all");
@@ -505,6 +508,17 @@ export function BatchTestDialog({
       setRetryingErrorKeys(prev => new Set([...prev, getBatchTestResultKey(test)]));
     }
     onRetryTest?.(test);
+  };
+
+  const handleClearResults = async () => {
+    if (!onClearResults) return;
+    await onClearResults();
+    setSelectedTests(new Set());
+    setCollapsedProviders(new Set());
+    setRetryingErrorKeys(new Set());
+    setStatusFilter("all");
+    setErrorTypeFilter("all");
+    setSearchTerm("");
   };
 
   return (
@@ -1026,6 +1040,16 @@ export function BatchTestDialog({
             )}
           </div>
           <div className="flex gap-2">
+            {!isRunning && onClearResults && (
+              <Button
+                variant="outline"
+                onClick={() => void handleClearResults()}
+                className="gap-2 text-red-600 hover:text-red-700"
+              >
+                <Trash2 className="h-4 w-4" />
+                {t("batch_test.clear_results")}
+              </Button>
+            )}
             <Button variant="outline" onClick={onClose}>
               {t("batch_test.close")}
             </Button>

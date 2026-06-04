@@ -1,4 +1,4 @@
-import { Pencil, Trash2, Zap, Check, X } from "lucide-react";
+import { Pencil, Play, Trash2, Zap, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -22,6 +22,7 @@ interface ProviderListProps {
   hoveredModel?: { provider: string | null; model: string | null } | null;
   onBadgeRef?: (provider: string, model: string, ref: HTMLDivElement | null) => void;
   searchTerm?: string;
+  onBatchTestProvider?: (provider: Provider) => void;
 }
 
 // Extract base domain from URL (protocol + hostname + port only)
@@ -47,7 +48,10 @@ interface ModelBadgeProps {
 }
 
 function ModelBadge({ providerName, model, showToast, removeToast, requestStats, testPrompt, isHovered, onBadgeRef, apiKeys }: ModelBadgeProps) {
+  const { t } = useTranslation();
   const [isTesting, setIsTesting] = useState(false);
+  const [statsDetail, setStatsDetail] = useState<RequestStatsItem | null>(null);
+  const [isLoadingStatsDetail, setIsLoadingStatsDetail] = useState(false);
   const badgeRef = useRef<HTMLDivElement>(null);
 
   // Register badge ref when component mounts
@@ -59,10 +63,31 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
 
   // Find stats for current provider:model
   const stats = getRequestStatsItem(requestStats, providerName, model);
+  const effectiveStats = statsDetail || stats;
   const successCount = stats?.success || 0;
   const failCount = stats?.fail || 0;
-  const lastSuccessRequest = stats?.lastSuccessRequest;
-  const lastFailureRequest = stats?.lastFailureRequest;
+  const lastSuccessRequest = effectiveStats?.lastSuccessRequest;
+  const lastFailureRequest = effectiveStats?.lastFailureRequest;
+
+  useEffect(() => {
+    setStatsDetail(null);
+    setIsLoadingStatsDetail(false);
+  }, [stats?.key]);
+
+  const loadStatsDetail = useCallback(async () => {
+    if (!stats?.key || statsDetail || isLoadingStatsDetail) return;
+    setIsLoadingStatsDetail(true);
+    try {
+      const data = await api.getRequestStatsDetail(stats.key);
+      if (data?.stat) {
+        setStatsDetail(data.stat);
+      }
+    } catch (err) {
+      console.error("Failed to load request stats detail:", err);
+    } finally {
+      setIsLoadingStatsDetail(false);
+    }
+  }, [isLoadingStatsDetail, stats?.key, statsDetail]);
 
   // Determine badge background color based on most recent event
   const getBadgeBackgroundClass = () => {
@@ -188,7 +213,7 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
       {/* Stats */}
       <div className="flex items-center gap-1 text-[10px] leading-none font-semibold text-gray-500">
         {/* Success Count */}
-        <Tooltip>
+        <Tooltip onOpenChange={(open) => { if (open) void loadStatsDetail(); }}>
           <TooltipTrigger asChild>
             <div className="flex items-center gap-0.5 px-1 py-0.5 rounded-sm cursor-help hover:bg-green-50 transition-colors">
               <Check className="h-3 w-3 text-emerald-500" />
@@ -203,31 +228,39 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
                   <div className="text-xs text-gray-600">
                     Timestamp: {new Date(lastSuccessRequest.timestamp).toLocaleString()}
                   </div>
-                  <div>
-                    <div className="font-semibold text-xs mb-1 text-gray-900">Request:</div>
-                    <pre
-                      className="bg-gray-50 border border-gray-200 p-2 rounded text-xs overflow-auto max-h-32 text-gray-900 cursor-pointer hover:bg-gray-100 transition-colors"
-                      onClick={(e) => handleCopyContent(lastSuccessRequest.request, 'Request', e)}
-                      title="Click to copy request"
-                    >
-                      {JSON.stringify(lastSuccessRequest.request, null, 2)}
-                    </pre>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-xs mb-1 text-gray-900">Response:</div>
-                    <pre
-                      className={`${lastSuccessRequest.response && typeof lastSuccessRequest.response === 'object' && 'error' in lastSuccessRequest.response ? 'bg-yellow-50 border-yellow-200 hover:bg-yellow-100' : 'bg-gray-50 border-gray-200 hover:bg-gray-100'} border p-2 rounded text-xs overflow-auto max-h-32 text-gray-900 cursor-pointer transition-colors`}
-                      onClick={(e) => handleCopyContent(lastSuccessRequest.response, 'Response', e)}
-                      title="Click to copy response"
-                    >
-                      {JSON.stringify(lastSuccessRequest.response, null, 2)}
-                    </pre>
-                    {lastSuccessRequest.response && typeof lastSuccessRequest.response === 'object' && 'error' in lastSuccessRequest.response && (
-                      <div className="text-xs text-yellow-600 mt-1 italic">
-                        ⚠️ Response reading failed - HTTP request succeeded but response body could not be parsed
+                  {lastSuccessRequest.request !== undefined || lastSuccessRequest.response !== undefined ? (
+                    <>
+                      <div>
+                        <div className="font-semibold text-xs mb-1 text-gray-900">Request:</div>
+                        <pre
+                          className="bg-gray-50 border border-gray-200 p-2 rounded text-xs overflow-auto max-h-32 text-gray-900 cursor-pointer hover:bg-gray-100 transition-colors"
+                          onClick={(e) => handleCopyContent(lastSuccessRequest.request, 'Request', e)}
+                          title="Click to copy request"
+                        >
+                          {JSON.stringify(lastSuccessRequest.request, null, 2)}
+                        </pre>
                       </div>
-                    )}
-                  </div>
+                      <div>
+                        <div className="font-semibold text-xs mb-1 text-gray-900">Response:</div>
+                        <pre
+                          className={`${lastSuccessRequest.response && typeof lastSuccessRequest.response === 'object' && 'error' in lastSuccessRequest.response ? 'bg-yellow-50 border-yellow-200 hover:bg-yellow-100' : 'bg-gray-50 border-gray-200 hover:bg-gray-100'} border p-2 rounded text-xs overflow-auto max-h-32 text-gray-900 cursor-pointer transition-colors`}
+                          onClick={(e) => handleCopyContent(lastSuccessRequest.response, 'Response', e)}
+                          title="Click to copy response"
+                        >
+                          {JSON.stringify(lastSuccessRequest.response, null, 2)}
+                        </pre>
+                        {lastSuccessRequest.response && typeof lastSuccessRequest.response === 'object' && 'error' in lastSuccessRequest.response && (
+                          <div className="text-xs text-yellow-600 mt-1 italic">
+                            Response reading failed - HTTP request succeeded but response body could not be parsed
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-xs text-gray-500">
+                      {isLoadingStatsDetail ? t("provider_list.loading_details") : t("provider_list.open_again_to_load_details")}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-xs text-gray-500">No successful requests yet</div>
@@ -263,7 +296,7 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
         </Tooltip>
 
         {/* Fail Count */}
-        <Tooltip>
+        <Tooltip onOpenChange={(open) => { if (open) void loadStatsDetail(); }}>
           <TooltipTrigger asChild>
             <div className="flex items-center gap-0.5 px-1 py-0.5 rounded-sm cursor-help hover:bg-red-50 transition-colors">
               <X className="h-3 w-3 text-rose-500" />
@@ -283,35 +316,43 @@ function ModelBadge({ providerName, model, showToast, removeToast, requestStats,
                       Status Code: {lastFailureRequest.statusCode}
                     </div>
                   )}
-                  <div>
-                    <div className="font-semibold text-xs mb-1 text-gray-900">Request:</div>
-                    <pre
-                      className="bg-gray-50 border border-gray-200 p-2 rounded text-xs overflow-auto max-h-24 text-gray-900 cursor-pointer hover:bg-gray-100 transition-colors"
-                      onClick={(e) => handleCopyContent(lastFailureRequest.request, 'Request', e)}
-                      title="Click to copy request"
-                    >
-                      {JSON.stringify(lastFailureRequest.request, null, 2)}
-                    </pre>
-                  </div>
-                  <div>
-                    <div className="font-semibold text-xs mb-1 text-red-600">Error:</div>
-                    <pre
-                      className="bg-red-50 border border-red-200 p-2 rounded text-xs overflow-auto max-h-32 text-red-700 cursor-pointer hover:bg-red-100 transition-colors"
-                      onClick={(e) => handleCopyContent(lastFailureRequest.error, 'Error', e)}
-                      title="Click to copy error"
-                    >
-                      {(() => {
-                        const error = lastFailureRequest.error;
-                        if (typeof error === 'object') {
-                          try { return JSON.stringify(error, null, 2); } catch { return String(error); }
-                        }
-                        if (typeof error === 'string') {
-                          try { return JSON.stringify(JSON.parse(error), null, 2); } catch { return error; }
-                        }
-                        return String(error);
-                      })()}
-                    </pre>
-                  </div>
+                  {lastFailureRequest.request !== undefined || lastFailureRequest.error !== undefined ? (
+                    <>
+                      <div>
+                        <div className="font-semibold text-xs mb-1 text-gray-900">Request:</div>
+                        <pre
+                          className="bg-gray-50 border border-gray-200 p-2 rounded text-xs overflow-auto max-h-24 text-gray-900 cursor-pointer hover:bg-gray-100 transition-colors"
+                          onClick={(e) => handleCopyContent(lastFailureRequest.request, 'Request', e)}
+                          title="Click to copy request"
+                        >
+                          {JSON.stringify(lastFailureRequest.request, null, 2)}
+                        </pre>
+                      </div>
+                      <div>
+                        <div className="font-semibold text-xs mb-1 text-red-600">Error:</div>
+                        <pre
+                          className="bg-red-50 border border-red-200 p-2 rounded text-xs overflow-auto max-h-32 text-red-700 cursor-pointer hover:bg-red-100 transition-colors"
+                          onClick={(e) => handleCopyContent(lastFailureRequest.error, 'Error', e)}
+                          title="Click to copy error"
+                        >
+                          {(() => {
+                            const error = lastFailureRequest.error;
+                            if (typeof error === 'object') {
+                              try { return JSON.stringify(error, null, 2); } catch { return String(error); }
+                            }
+                            if (typeof error === 'string') {
+                              try { return JSON.stringify(JSON.parse(error), null, 2); } catch { return error; }
+                            }
+                            return String(error);
+                          })()}
+                        </pre>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-xs text-gray-500">
+                      {isLoadingStatsDetail ? t("provider_list.loading_details") : t("provider_list.open_again_to_load_details")}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-xs text-gray-500">No failed requests yet</div>
@@ -430,7 +471,8 @@ function ConnectivityTestButton({ apiBaseUrl, showToast, removeToast }: Connecti
   );
 }
 
-export function ProviderList({ providers, onEdit, onRemove, showToast, removeToast, requestStats, hoveredModel, onBadgeRef, searchTerm = "" }: ProviderListProps) {
+export function ProviderList({ providers, onEdit, onRemove, showToast, removeToast, requestStats, hoveredModel, onBadgeRef, searchTerm = "", onBatchTestProvider }: ProviderListProps) {
+  const { t } = useTranslation();
   // Wrap the entire provider list with a single TooltipProvider to avoid multiple providers
   if (!providers || !Array.isArray(providers)) {
     return (
@@ -535,6 +577,17 @@ export function ProviderList({ providers, onEdit, onRemove, showToast, removeToa
               </div>
 
               <div className="flex sm:flex-col gap-2 self-end sm:self-start flex-shrink-0">
+                {onBatchTestProvider && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => onBatchTestProvider(provider)}
+                    className="transition-all-ease hover:scale-110 h-8 w-8"
+                    title={t("provider_list.batch_test_provider")}
+                  >
+                    <Play className="h-4 w-4 text-blue-500" />
+                  </Button>
+                )}
                 <Button variant="ghost" size="icon" onClick={() => onEdit(index)} className="transition-all-ease hover:scale-110 h-8 w-8">
                   <Pencil className="h-4 w-4 text-gray-500" />
                 </Button>

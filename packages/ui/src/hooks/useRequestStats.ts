@@ -20,6 +20,9 @@ export interface RequestStatsItem {
   keyIndex?: number;  // Present for per-key entries (format: provider:#N:model)
   success: number;
   fail: number;
+  lastSuccessAt?: string;
+  lastFailureAt?: string;
+  lastFailureStatusCode?: number;
   lastSuccessRequest?: LastSuccessInfo;
   lastFailureRequest?: LastFailureInfo;
   /** @deprecated backward compat */
@@ -91,6 +94,8 @@ export function useRequestStats() {
           });
         } else if (message.type === 'clear') {
           setStats([]);
+        } else if (message.type === 'provider_clear' && message.provider) {
+          setStats(prev => prev.filter(item => item.provider !== message.provider));
         }
       } catch (err) {
         console.error('Failed to parse SSE message:', err);

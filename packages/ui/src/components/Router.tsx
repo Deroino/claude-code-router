@@ -2,18 +2,21 @@ import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { useConfig } from "./ConfigProvider";
 import { Combobox } from "./ui/combobox";
 import type { RequestStatsItem } from "@/hooks/useRequestStats";
 import { generateAllOptions, isGroupReference } from "@/lib/modelOptions";
+import { Play } from "lucide-react";
 
 interface RouterProps {
   hoveredModel?: { provider: string | null; model: string | null };
   onHoverModel?: (provider: string | null, model: string | null) => void;
   requestStats?: RequestStatsItem[];
+  onBatchTestSelected?: () => void;
 }
 
-export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps) {
+export function Router({ hoveredModel, onHoverModel, requestStats, onBatchTestSelected }: RouterProps) {
   const { t } = useTranslation();
   const { config, setConfig } = useConfig();
 
@@ -119,8 +122,18 @@ export function Router({ hoveredModel, onHoverModel, requestStats }: RouterProps
 
   return (
     <Card className="flex h-full flex-col rounded-lg border shadow-sm">
-      <CardHeader className="border-b p-4">
+      <CardHeader className="flex flex-row items-center justify-between border-b p-4">
         <CardTitle className="text-lg">{t("router.title")}</CardTitle>
+        {onBatchTestSelected && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onBatchTestSelected}
+          >
+            <Play className="h-4 w-4 mr-1.5" />
+            {t("router.test_selected")}
+          </Button>
+        )}
       </CardHeader>
       <CardContent className="flex-grow space-y-5 overflow-y-auto p-4">
         <div className="space-y-2">

@@ -21,14 +21,16 @@ export function getRequestStatus(
 
   const lastSuccess = stats.lastSuccessRequest;
   const lastFailure = stats.lastFailureRequest;
+  const lastSuccessAt = stats.lastSuccessAt || lastSuccess?.timestamp;
+  const lastFailureAt = stats.lastFailureAt || lastFailure?.timestamp;
 
-  if (!lastSuccess && !lastFailure) return "neutral";
+  if (!lastSuccessAt && !lastFailureAt) return "neutral";
 
-  const successTime = lastSuccess
-    ? new Date(lastSuccess.timestamp).getTime()
+  const successTime = lastSuccessAt
+    ? new Date(lastSuccessAt).getTime()
     : 0;
-  const failureTime = lastFailure
-    ? new Date(lastFailure.timestamp).getTime()
+  const failureTime = lastFailureAt
+    ? new Date(lastFailureAt).getTime()
     : 0;
 
   if (failureTime > successTime) return "error";

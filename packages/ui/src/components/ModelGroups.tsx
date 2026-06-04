@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Combobox } from "@/components/ui/combobox";
-import { Plus, Pencil, Trash2, X, Layers, Check } from "lucide-react";
+import { Plus, Pencil, Trash2, X, Layers, Check, Play } from "lucide-react";
 import { useConfig } from "./ConfigProvider";
 import type { Config, ModelGroup, Provider, RouterConfig, RouterModelField } from "@/types";
 import { ROUTER_MODEL_FIELDS } from "@/types";
@@ -75,11 +75,12 @@ interface ModelGroupsProps {
   requestStats?: RequestStatsItem[];
   hoveredModel?: { provider: string | null; model: string | null } | null;
   onHoverModel?: (provider: string | null, model: string | null) => void;
+  onBatchTestModels?: (values: string[], title?: string) => void;
 }
 
 const GROUP_NAME_REGEX = /^[a-zA-Z0-9_-]+$/;
 
-export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelGroupsProps) {
+export function ModelGroups({ requestStats, hoveredModel, onHoverModel, onBatchTestModels }: ModelGroupsProps) {
   const { t } = useTranslation();
   const { config, setConfig } = useConfig();
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -362,6 +363,23 @@ export function ModelGroups({ requestStats, hoveredModel, onHoverModel }: ModelG
                       </div>
                     </div>
                     <div className="ml-3 flex gap-1 shrink-0">
+                      {onBatchTestModels && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() =>
+                            onBatchTestModels(
+                              group.models || [],
+                              t("groups.batch_test_title", { group: group.name })
+                            )
+                          }
+                          disabled={!group.models || group.models.length === 0}
+                          title={t("groups.test_group")}
+                        >
+                          <Play className="h-3.5 w-3.5 text-blue-500" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"

@@ -138,7 +138,13 @@
     "name_duplicate": "已存在同名供应商",
     "search": "搜索供应商...",
     "add_api_key": "添加 API 密钥",
-    "test": "测试"
+    "test": "测试",
+    "clear_request_stats": "清空计数",
+    "clear_request_stats_success": "请求计数已清空",
+    "clear_request_stats_failed": "清空请求计数失败",
+    "provider_batch_test_title": "{{provider}} 批量测试",
+    "provider_removed_cleanup_failed": "供应商已删除，但部分持久化测试数据清理失败",
+    "unnamed_provider": "未命名供应商"
 
   },
   "router": {
@@ -154,7 +160,9 @@
     "compact": "压缩（对话摘要）",
     "selectModel": "选择一个模型...",
     "searchModel": "搜索模型...",
-    "noModelFound": "未找到模型."
+    "noModelFound": "未找到模型.",
+    "test_selected": "测试已选",
+    "batch_test_title": "路由模型测试"
   },
   "json_editor": {
     "title": "JSON 编辑器",
@@ -422,7 +430,10 @@
     "connectivity_ok": "{{url}} 可达 ({{ms}}ms, HTTP {{status}})",
     "connectivity_fail": "{{url}} 不可达: {{error}}",
     "per_key_breakdown": "分 Key 统计",
-    "auto_round_robin": "自动"
+    "auto_round_robin": "自动",
+    "loading_details": "正在加载详情...",
+    "open_again_to_load_details": "再次打开以加载详情",
+    "batch_test_provider": "批量测试此供应商"
   },
   "model_monitor": {
     "title": "模型监控",
@@ -444,6 +455,9 @@
     "status": "状态",
     "details": "详情",
     "no_results": "暂无结果",
+    "clear_results": "清空结果",
+    "clear_results_success": "批量测试结果已清空",
+    "clear_results_failed": "清空批量测试结果失败",
     "selected": "已选择 {{count}} 个",
     "close": "关闭",
     "run_selected": "运行选中的测试",
@@ -576,6 +590,8 @@
     "search_model": "搜索模型...",
     "no_groups": "暂未创建模型组",
     "in_use_warning": "此组正在被路由场景使用",
-    "model_already_added": "该模型已添加到组中"
+    "model_already_added": "该模型已添加到组中",
+    "test_group": "批量测试此模型组",
+    "batch_test_title": "{{group}} 模型组测试"
   }
 }

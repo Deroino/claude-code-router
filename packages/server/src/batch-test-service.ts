@@ -146,6 +146,44 @@ class BatchTestService {
     return { success: true, completed, cancelled };
   }
 
+  clear(): { success: boolean; removed: number; error?: string } {
+    if (this.taskStatus === "running" || this.taskStatus === "cancelling") {
+      return { success: false, removed: 0, error: "A batch test is currently running" };
+    }
+
+    const removed = this.results.length || this.loadPersistedResults().length;
+    this.results = [];
+    this.taskStatus = "idle";
+    this.startedAt = null;
+    this.completedAt = null;
+    this.persistResults();
+
+    return { success: true, removed };
+  }
+
+  clearProvider(provider: string): { success: boolean; removed: number; error?: string } {
+    if (this.taskStatus === "running" || this.taskStatus === "cancelling") {
+      return { success: false, removed: 0, error: "A batch test is currently running" };
+    }
+
+    const sourceResults = this.results.length > 0 ? this.results : this.loadPersistedResults();
+    const nextResults = sourceResults.filter(item => item.provider !== provider);
+    const removed = sourceResults.length - nextResults.length;
+
+    if (nextResults.length === 0) {
+      this.taskStatus = "idle";
+      this.startedAt = null;
+      this.completedAt = null;
+    }
+
+    if (removed > 0 || this.results.length === 0) {
+      this.results = nextResults;
+      this.persistResults();
+    }
+
+    return { success: true, removed };
+  }
+
   /**
    * Get the current status and all results.
    */

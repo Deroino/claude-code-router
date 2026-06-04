@@ -398,6 +398,34 @@ class ApiClient {
     return this.put<{ success: boolean }>('/batch-test-results', { results });
   }
 
+  // Clear all batch test results from server persistence
+  async clearBatchTestResults(): Promise<{ success: boolean; removed: number; error?: string }> {
+    return this.delete<{ success: boolean; removed: number; error?: string }>('/batch-test-results');
+  }
+
+  // Clear batch test results for one provider from server persistence
+  async clearProviderBatchTestResults(provider: string): Promise<{ success: boolean; removed: number; error?: string }> {
+    return this.delete<{ success: boolean; removed: number; error?: string }>(
+      `/batch-test-results/provider/${encodeURIComponent(provider)}`
+    );
+  }
+
+  // ========== Request Stats API ==========
+
+  async getRequestStatsDetail(key: string): Promise<{ stat: any }> {
+    return this.get<{ stat: any }>(`/request-stats/detail?key=${encodeURIComponent(key)}`);
+  }
+
+  async clearRequestStats(): Promise<{ success: boolean; message?: string }> {
+    return this.delete<{ success: boolean; message?: string }>('/request-stats');
+  }
+
+  async clearProviderRequestStats(provider: string): Promise<{ success: boolean; removed: number }> {
+    return this.delete<{ success: boolean; removed: number }>(
+      `/request-stats/provider/${encodeURIComponent(provider)}`
+    );
+  }
+
   // ========== Backend Batch Test API ==========
 
   // Start a batch test task on the backend

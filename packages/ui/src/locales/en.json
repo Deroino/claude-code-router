@@ -138,7 +138,13 @@
     "name_duplicate": "A provider with this name already exists",
     "search": "Search providers...",
     "add_api_key": "Add API Key",
-    "test": "Test"
+    "test": "Test",
+    "clear_request_stats": "Clear Counts",
+    "clear_request_stats_success": "Request counts cleared",
+    "clear_request_stats_failed": "Failed to clear request counts",
+    "provider_batch_test_title": "{{provider}} Batch Test",
+    "provider_removed_cleanup_failed": "Provider removed, but some persisted test data could not be cleared",
+    "unnamed_provider": "Unnamed Provider"
 
   },
   "router": {
@@ -154,7 +160,9 @@
     "compact": "Compact (Chat Summarization)",
     "selectModel": "Select a model...",
     "searchModel": "Search model...",
-    "noModelFound": "No model found."
+    "noModelFound": "No model found.",
+    "test_selected": "Test Selected",
+    "batch_test_title": "Router Model Tests"
   },
   "json_editor": {
     "title": "JSON Editor",
@@ -423,7 +431,10 @@
     "connectivity_ok": "{{url}} reachable ({{ms}}ms, HTTP {{status}})",
     "connectivity_fail": "{{url}} unreachable: {{error}}",
     "per_key_breakdown": "Per-Key Breakdown",
-    "auto_round_robin": "Auto"
+    "auto_round_robin": "Auto",
+    "loading_details": "Loading details...",
+    "open_again_to_load_details": "Open again to load details",
+    "batch_test_provider": "Batch test provider"
   },
   "model_monitor": {
     "title": "Model Monitor",
@@ -445,6 +456,9 @@
     "status": "Status",
     "details": "Details",
     "no_results": "No results to display",
+    "clear_results": "Clear Results",
+    "clear_results_success": "Batch test results cleared",
+    "clear_results_failed": "Failed to clear batch test results",
     "selected": "{{count}} selected",
     "close": "Close",
     "run_selected": "Run Selected Tests",
@@ -577,6 +591,8 @@
     "search_model": "Search model...",
     "no_groups": "No model groups created yet",
     "in_use_warning": "This group is currently in use by router",
-    "model_already_added": "This model is already in the group"
+    "model_already_added": "This model is already in the group",
+    "test_group": "Batch test this group",
+    "batch_test_title": "{{group}} Model Group Tests"
   }
 }

@@ -9,9 +9,23 @@ import { Router } from "@/components/Router";
 import { JsonEditor } from "@/components/JsonEditor";
 import { LogViewer } from "@/components/LogViewer";
 import { ModelMonitorPanel } from "@/components/ModelMonitorPanel";
+import { BatchTestDialog } from "@/components/BatchTestDialog";
+import type { BatchTestResult } from "@/components/BatchTestDialog";
 import { Button } from "@/components/ui/button";
 import { useConfig } from "@/components/ConfigProvider";
 import { api } from "@/lib/api";
+import {
+  buildBatchTestsForModelValues,
+  buildFreshBatchTests,
+  filterProviderBatchTestResults,
+  filterRemovedBatchTestResult,
+  filterRemovedBatchTestResults,
+  getSelectedRouterModelValues,
+  markBatchTestsAsTesting,
+  mergeBatchTestResults,
+  mergePersistedBatchTests,
+  type BatchTestTarget,
+} from "@/lib/batchTests";
 import { useModelMonitorLogs } from "@/hooks/useModelMonitorLogs";
 import { useRequestStats } from "@/hooks/useRequestStats";
 import {
@@ -82,6 +96,25 @@ function App() {
   // Get request statistics for model status display
   const { stats: requestStats } = useRequestStats();
 
+  // Shared batch test state used by Providers, Router, and Model Groups.
+  const [showBatchTestDialog, setShowBatchTestDialog] = useState(false);
+  const [batchTestResults, setBatchTestResults] = useState<BatchTestResult[]>([]);
+  const [isBatchTesting, setIsBatchTesting] = useState(false);
+  const [batchTestConcurrency, setBatchTestConcurrency] = useState(20);
+  const [batchTestStartedAt, setBatchTestStartedAt] = useState<number | null>(null);
+  const [batchTestCompletedAt, setBatchTestCompletedAt] = useState<number | null>(null);
+  const [batchTestTitle, setBatchTestTitle] = useState<string>(t("batch_test.title"));
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const providerApiUrls = useMemo(() => {
+    const providers = Array.isArray(config?.Providers) ? config.Providers : [];
+    return Object.fromEntries(
+      providers
+        .filter(provider => provider.name && provider.api_base_url)
+        .map(provider => [provider.name, provider.api_base_url])
+    );
+  }, [config?.Providers]);
+
   // Handle hover on model from ModelMonitorPanel
   const handleHoverModel = useCallback((provider: string | null, model: string | null) => {
     console.log('[App] handleHoverModel:', { provider, model });
@@ -150,15 +183,206 @@ function App() {
     return id;
   }, []);
 
-  // Update toast message in-place (for progress indicators)
-  const updateToast = useCallback((id: string, message: string) => {
-    setToasts(prev => prev.map(t => t.id === id ? { ...t, message } : t));
-  }, []);
-
   // Remove toast function
   const removeToast = useCallback((id: string) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
+
+  const pollBatchTestStatus = useCallback(async () => {
+    try {
+      const status = await api.getBatchTestStatus();
+      if (status.results?.length > 0) {
+        setBatchTestResults(prev => mergeBatchTestResults(prev, status.results));
+      }
+      if (status.startedAt !== undefined) {
+        setBatchTestStartedAt(status.startedAt);
+      }
+      if (status.completedAt !== undefined) {
+        setBatchTestCompletedAt(status.completedAt);
+      }
+
+      if (status.status === "running" || status.status === "cancelling") {
+        setIsBatchTesting(true);
+      } else {
+        setIsBatchTesting(false);
+        if (pollTimerRef.current) {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
+      }
+    } catch (err) {
+      console.error("Failed to poll batch test status:", err);
+    }
+  }, []);
+
+  const startBatchTestPolling = useCallback(() => {
+    if (pollTimerRef.current) return;
+    pollTimerRef.current = setInterval(pollBatchTestStatus, 2000);
+  }, [pollBatchTestStatus]);
+
+  const handleOpenBatchTest = useCallback(async (tests: BatchTestTarget[], title?: string) => {
+    if (tests.length === 0) {
+      showToast(t("batch_test.no_models_to_test"), "warning");
+      return;
+    }
+
+    setBatchTestTitle(title || t("batch_test.title"));
+    try {
+      const data = await api.getBatchTestResults();
+      if (data?.results?.length > 0) {
+        setBatchTestResults(mergePersistedBatchTests(tests, data.results));
+        setBatchTestStartedAt(data.startedAt ?? null);
+        setBatchTestCompletedAt(data.completedAt ?? null);
+      } else {
+        setBatchTestResults(buildFreshBatchTests(tests));
+        setBatchTestStartedAt(null);
+        setBatchTestCompletedAt(null);
+      }
+    } catch {
+      setBatchTestResults(buildFreshBatchTests(tests));
+      setBatchTestStartedAt(null);
+      setBatchTestCompletedAt(null);
+    }
+
+    setShowBatchTestDialog(true);
+  }, [showToast, t]);
+
+  const handleRunBatchTests = useCallback(async (selectedTests: BatchTestResult[]) => {
+    if (selectedTests.length === 0) return;
+
+    const tests = selectedTests.map(test => ({
+      provider: test.provider,
+      model: test.model,
+      ...(test.keyIndex !== undefined ? { keyIndex: test.keyIndex } : {}),
+    }));
+
+    setBatchTestResults(prev => markBatchTestsAsTesting(prev, selectedTests));
+
+    try {
+      const result = await api.startBatchTest(tests, batchTestConcurrency);
+      if (result.success) {
+        setIsBatchTesting(true);
+        showToast(
+          t("batch_test.started", { total: result.total, concurrency: result.concurrency }),
+          "success",
+          3000
+        );
+        await pollBatchTestStatus();
+        startBatchTestPolling();
+      } else {
+        showToast(result.error || t("batch_test.start_failed"), "error", 5000);
+      }
+    } catch (err: any) {
+      if (err.status === 409) {
+        showToast(t("batch_test.already_running"), "warning", 5000);
+      } else {
+        showToast(err.message || t("batch_test.start_failed"), "error", 5000);
+      }
+      await pollBatchTestStatus();
+    }
+  }, [batchTestConcurrency, pollBatchTestStatus, showToast, startBatchTestPolling, t]);
+
+  const handleCancelBatchTest = useCallback(async () => {
+    try {
+      const result = await api.cancelBatchTest();
+      if (result.success) {
+        showToast(
+          t("batch_test.cancelled", { completed: result.completed, cancelled: result.cancelled }),
+          "warning",
+          5000
+        );
+        await pollBatchTestStatus();
+      }
+    } catch (err: any) {
+      showToast(err.message || t("batch_test.cancel_failed"), "error", 5000);
+    }
+  }, [pollBatchTestStatus, showToast, t]);
+
+  const handleClearBatchTestResults = useCallback(async () => {
+    try {
+      await api.clearBatchTestResults();
+      setBatchTestResults([]);
+      setBatchTestStartedAt(null);
+      setBatchTestCompletedAt(null);
+      setBatchTestTitle(t("batch_test.title"));
+      showToast(t("batch_test.clear_results_success"), "success");
+    } catch (err: any) {
+      showToast(err?.message || t("batch_test.clear_results_failed"), "error", 5000);
+    }
+  }, [showToast, t]);
+
+  const handleProviderBatchResultsCleared = useCallback((provider: string) => {
+    setBatchTestResults(prev => {
+      const next = filterProviderBatchTestResults(prev, provider);
+      if (next.length === 0) {
+        setBatchTestStartedAt(null);
+        setBatchTestCompletedAt(null);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleBatchTestModelValues = useCallback((values: string[], title?: string) => {
+    const providers = Array.isArray(config?.Providers) ? config.Providers : [];
+    const groups = Array.isArray(config?.ModelGroups) ? config.ModelGroups : [];
+    void handleOpenBatchTest(
+      buildBatchTestsForModelValues(values, providers, groups),
+      title
+    );
+  }, [config?.ModelGroups, config?.Providers, handleOpenBatchTest]);
+
+  const handleBatchTestRouterModels = useCallback(() => {
+    handleBatchTestModelValues(
+      getSelectedRouterModelValues(config?.Router),
+      t("router.batch_test_title")
+    );
+  }, [config?.Router, handleBatchTestModelValues, t]);
+
+  useEffect(() => {
+    api.getBatchTestStatus().then(status => {
+      if (status.results?.length > 0) {
+        setBatchTestResults(prev => mergeBatchTestResults(prev, status.results));
+      }
+      if (status.concurrency) {
+        setBatchTestConcurrency(status.concurrency);
+      }
+      if (status.startedAt !== undefined) {
+        setBatchTestStartedAt(status.startedAt);
+      }
+      if (status.completedAt !== undefined) {
+        setBatchTestCompletedAt(status.completedAt);
+      }
+      if (status.status === "running" || status.status === "cancelling") {
+        setIsBatchTesting(true);
+        setShowBatchTestDialog(true);
+        startBatchTestPolling();
+      } else if (!status.results?.length) {
+        api.getBatchTestResults().then(data => {
+          if (data?.results?.length > 0) {
+            setBatchTestResults(data.results);
+            setBatchTestStartedAt(data.startedAt ?? null);
+            setBatchTestCompletedAt(data.completedAt ?? null);
+          }
+        }).catch(() => {});
+      }
+    }).catch(err => {
+      console.error("Failed to load batch test status:", err);
+      api.getBatchTestResults().then(data => {
+        if (data?.results?.length > 0) {
+          setBatchTestResults(data.results);
+          setBatchTestStartedAt(data.startedAt ?? null);
+          setBatchTestCompletedAt(data.completedAt ?? null);
+        }
+      }).catch(() => {});
+    });
+
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [startBatchTestPolling]);
 
   // Restart service - wait for pending auto-save to complete
   const restartService = async () => {
@@ -743,10 +967,12 @@ function App() {
           }`}>
             <Providers
               showToast={showToast}
-              updateToast={updateToast}
               removeToast={removeToast}
+              requestStats={requestStats}
               hoveredModel={hoveredModel}
               onBadgeRef={handleBadgeRef}
+              onOpenBatchTest={handleOpenBatchTest}
+              onProviderResultsCleared={handleProviderBatchResultsCleared}
             />
           </div>
         )}
@@ -756,12 +982,22 @@ function App() {
           <div className="flex flex-col flex-1 gap-2 md:gap-4 min-w-0 min-h-0 animate-slide-in">
             {showRouter && (
               <div className="flex-1 min-h-0">
-                <Router hoveredModel={hoveredModel} onHoverModel={handleHoverModel} requestStats={requestStats} />
+                <Router
+                  hoveredModel={hoveredModel}
+                  onHoverModel={handleHoverModel}
+                  requestStats={requestStats}
+                  onBatchTestSelected={handleBatchTestRouterModels}
+                />
               </div>
             )}
             {showModelGroups && (
               <div className="flex-1 min-h-0">
-                <ModelGroups requestStats={requestStats} hoveredModel={hoveredModel} onHoverModel={handleHoverModel} />
+                <ModelGroups
+                  requestStats={requestStats}
+                  hoveredModel={hoveredModel}
+                  onHoverModel={handleHoverModel}
+                  onBatchTestModels={handleBatchTestModelValues}
+                />
               </div>
             )}
             {showTransformers && (
@@ -795,6 +1031,56 @@ function App() {
         open={isLogViewerOpen}
         onOpenChange={setIsLogViewerOpen}
         showToast={showToast}
+      />
+      <BatchTestDialog
+        open={showBatchTestDialog}
+        onClose={() => setShowBatchTestDialog(false)}
+        results={batchTestResults}
+        title={batchTestTitle}
+        onRunTests={handleRunBatchTests}
+        onRetryTest={(test) => void handleRunBatchTests([test])}
+        onCancel={handleCancelBatchTest}
+        onClearResults={handleClearBatchTestResults}
+        isRunning={isBatchTesting}
+        concurrency={batchTestConcurrency}
+        onConcurrencyChange={setBatchTestConcurrency}
+        startedAt={batchTestStartedAt}
+        completedAt={batchTestCompletedAt}
+        providerApiUrls={providerApiUrls}
+        onTestConnectivity={async (_provider: string, url: string) => {
+          const toastId = showToast(t("provider_list.connectivity_testing", { url }), "warning", 0);
+          try {
+            const result = await api.testConnectivity(url);
+            removeToast(toastId);
+            if (result?.success) {
+              showToast(
+                t("provider_list.connectivity_ok", { url, ms: result.latency_ms, status: result.status }),
+                "success",
+                5000
+              );
+            } else {
+              showToast(
+                t("provider_list.connectivity_fail", { url, error: result?.error || "Unknown error" }),
+                "error",
+                8000
+              );
+            }
+          } catch (err: any) {
+            removeToast(toastId);
+            showToast(
+              t("provider_list.connectivity_fail", { url, error: err?.message || "Network error" }),
+              "error",
+              5000
+            );
+          }
+        }}
+        showToast={showToast}
+        onModelRemoved={(provider, model) => {
+          setBatchTestResults(prev => filterRemovedBatchTestResult(prev, provider, model));
+        }}
+        onFailedModelsRemoved={(provider, models) => {
+          setBatchTestResults(prev => filterRemovedBatchTestResults(prev, provider, models));
+        }}
       />
       <Dialog open={isUpdateDialogOpen} onOpenChange={setIsUpdateDialogOpen}>
         <DialogContent className="max-w-2xl">
