@@ -96,6 +96,66 @@ function cloneHeadersForUpstream(headers: any): any {
   return clonedHeaders;
 }
 
+function decodeHtmlEntities(text: string): string {
+  const namedEntities: Record<string, string> = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    nbsp: " ",
+  };
+
+  return text.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, entity) => {
+    if (entity[0] === "#") {
+      const isHex = entity[1]?.toLowerCase() === "x";
+      const value = Number.parseInt(entity.slice(isHex ? 2 : 1), isHex ? 16 : 10);
+      return Number.isFinite(value) && value >= 0 && value <= 0x10ffff
+        ? String.fromCodePoint(value)
+        : match;
+    }
+
+    return namedEntities[entity.toLowerCase()] || match;
+  });
+}
+
+function normalizeWhitespace(text: string): string {
+  return decodeHtmlEntities(text)
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractHtmlTagContent(html: string, tagName: string): string | undefined {
+  const match = html.match(new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i"));
+  const content = match ? normalizeWhitespace(match[1]) : "";
+  return content || undefined;
+}
+
+function summarizeProviderErrorPayload(payload: string): string {
+  const looksLikeHtml =
+    /<!doctype\s+html/i.test(payload) ||
+    /<html\b/i.test(payload) ||
+    /<title\b/i.test(payload) ||
+    /<body\b/i.test(payload);
+
+  if (!looksLikeHtml) {
+    return payload;
+  }
+
+  const title = extractHtmlTagContent(payload, "title");
+  const body = extractHtmlTagContent(payload, "body") || normalizeWhitespace(payload);
+  const bodySummary = body && body !== title ? body.slice(0, 800) : undefined;
+
+  return [
+    "HTML error page",
+    title ? `title: ${title}` : undefined,
+    bodySummary ? `body: ${bodySummary}${body.length > bodySummary.length ? "..." : ""}` : undefined,
+  ].filter(Boolean).join("; ");
+}
+
 /**
  * Main handler for transformer endpoints
  * Coordinates the entire request processing flow: validate provider, handle request transformers,
@@ -613,8 +673,9 @@ async function sendRequestToProvider(
     fastify.log.error(
       `[provider_response_error] Error from provider(${provider.name},${requestBody.model}: ${response.status}): ${errorText}`,
     );
+    const readableErrorText = summarizeProviderErrorPayload(errorText);
     throw createApiError(
-      `Error from provider(${provider.name},${requestBody.model}: ${response.status}): ${errorText}`,
+      `Error from provider(${provider.name},${requestBody.model}: ${response.status}): ${readableErrorText}`,
       response.status,
       "provider_response_error"
     );

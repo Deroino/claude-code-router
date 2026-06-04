@@ -36,6 +36,18 @@ const CCR_MODEL_TEST_TIMEOUT_MS = 20_000;
 const CCR_TEST_KEY_INDEX_HEADER = "x-ccr-test-key-index";
 const CCR_TEST_DISABLE_FALLBACK_HEADER = "x-ccr-test-disable-fallback";
 
+function resolveUiDistRoot(): string {
+  const candidates = [
+    join(__dirname, "..", "dist"),
+    join(__dirname, "..", "..", "ui", "dist"),
+    join(process.cwd(), "..", "ui", "dist"),
+    join(process.cwd(), "packages", "ui", "dist"),
+    join(process.cwd(), "dist"),
+  ];
+
+  return candidates.find(candidate => existsSync(join(candidate, "index.html"))) || candidates[0];
+}
+
 function serializeRequestStatsItem(key: string, value: any, includeDetails = false) {
   const parsed = parseStatsKey(key);
   const lastSuccessAt = value?.lastSuccessRequest?.timestamp;
@@ -652,7 +664,7 @@ export const createServer = async (config: any): Promise<any> => {
 
   // Register static file serving with caching
   app.register(fastifyStatic, {
-    root: join(__dirname, "..", "dist"),
+    root: resolveUiDistRoot(),
     prefix: "/ui/",
     maxAge: "1h",
   });
