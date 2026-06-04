@@ -5,6 +5,7 @@ log.txt
 dist
 .DS_Store
 .vscode
+.antigravitycli/
 tsconfig.tsbuildinfo
 llms
 
