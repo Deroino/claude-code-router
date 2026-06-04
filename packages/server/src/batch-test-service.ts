@@ -8,6 +8,9 @@ export interface BatchTestItem {
   status: "idle" | "testing" | "success" | "error" | "cancelled";
   message?: string;
   response?: string;
+  statusCode?: number;
+  rawResponse?: unknown;
+  debug?: unknown;
   timestamp?: number;
 }
 
@@ -26,7 +29,29 @@ type ExecuteModelTestFn = (
   message?: string,
   signal?: AbortSignal,
   keyIndex?: number
-) => Promise<{ success: boolean; status?: number; response?: string; error?: string }>;
+) => Promise<{
+  success: boolean;
+  status?: number;
+  response?: string;
+  error?: unknown;
+  rawResponse?: unknown;
+  debug?: unknown;
+  keyIndex?: number;
+}>;
+
+function formatResultMessage(error: unknown): string | undefined {
+  if (error === undefined || error === null) {
+    return undefined;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
 
 /**
  * Singleton service that manages batch model testing on the backend.
@@ -239,7 +264,16 @@ class BatchTestService {
         const item = this.results[index];
 
         // Mark as testing
-        this.results[index] = { ...item, status: "testing", timestamp: Date.now() };
+        this.results[index] = {
+          ...item,
+          status: "testing",
+          message: undefined,
+          response: undefined,
+          statusCode: undefined,
+          rawResponse: undefined,
+          debug: undefined,
+          timestamp: Date.now(),
+        };
 
         try {
           const result = await executeModelTest(
@@ -257,6 +291,10 @@ class BatchTestService {
                 ...item,
                 status: "cancelled",
                 message: "Cancelled",
+                response: undefined,
+                statusCode: result.status,
+                rawResponse: result.rawResponse,
+                debug: result.debug,
                 timestamp: Date.now(),
               };
             } else {
@@ -266,8 +304,11 @@ class BatchTestService {
                 model: item.model,
                 ...(item.keyIndex !== undefined ? { keyIndex: item.keyIndex } : {}),
                 status: result.success ? "success" : "error",
-                message: result.error || undefined,
+                message: formatResultMessage(result.error),
                 response: result.response || undefined,
+                statusCode: result.status,
+                rawResponse: result.rawResponse,
+                debug: result.debug,
                 timestamp: Date.now(),
               };
             }
@@ -277,8 +318,11 @@ class BatchTestService {
               model: item.model,
               ...(item.keyIndex !== undefined ? { keyIndex: item.keyIndex } : {}),
               status: result.success ? "success" : "error",
-              message: result.error || undefined,
+              message: formatResultMessage(result.error),
               response: result.response || undefined,
+              statusCode: result.status,
+              rawResponse: result.rawResponse,
+              debug: result.debug,
               timestamp: Date.now(),
             };
           }
@@ -287,6 +331,10 @@ class BatchTestService {
             ...item,
             status: "error",
             message: err.message || "Unknown error",
+            response: undefined,
+            statusCode: undefined,
+            rawResponse: undefined,
+            debug: undefined,
             timestamp: Date.now(),
           };
         }
@@ -309,6 +357,10 @@ class BatchTestService {
             ...this.results[i],
             status: "cancelled",
             message: "Cancelled",
+            response: undefined,
+            statusCode: undefined,
+            rawResponse: undefined,
+            debug: undefined,
             timestamp: Date.now(),
           };
         }

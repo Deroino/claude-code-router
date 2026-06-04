@@ -138,11 +138,11 @@
     "name_duplicate": "已存在同名供应商",
     "search": "搜索供应商...",
     "add_api_key": "添加 API 密钥",
-    "test": "测试",
+    "test": "CCR 测试",
     "clear_request_stats": "清空计数",
     "clear_request_stats_success": "请求计数已清空",
     "clear_request_stats_failed": "清空请求计数失败",
-    "provider_batch_test_title": "{{provider}} 批量测试",
+    "provider_batch_test_title": "{{provider}} CCR 可用性测试",
     "provider_removed_cleanup_failed": "供应商已删除，但部分持久化测试数据清理失败",
     "unnamed_provider": "未命名供应商"
 
@@ -162,7 +162,7 @@
     "searchModel": "搜索模型...",
     "noModelFound": "未找到模型.",
     "test_selected": "测试已选",
-    "batch_test_title": "路由模型测试"
+    "batch_test_title": "路由 CCR 可用性测试"
   },
   "json_editor": {
     "title": "JSON 编辑器",
@@ -441,7 +441,7 @@
     "waiting": "等待请求..."
   },
   "batch_test": {
-    "title": "批量测试结果",
+    "title": "CCR 可用性测试结果",
     "testing": "测试中...",
     "remaining": "剩余 {{count}} 个",
     "all": "全部",
@@ -460,7 +460,7 @@
     "clear_results_failed": "清空批量测试结果失败",
     "selected": "已选择 {{count}} 个",
     "close": "关闭",
-    "run_selected": "运行选中的测试",
+    "run_selected": "运行 CCR 可用性测试",
     "retry": "重试",
     "success_status": "成功",
     "failed_status": "失败",
@@ -592,6 +592,6 @@
     "in_use_warning": "此组正在被路由场景使用",
     "model_already_added": "该模型已添加到组中",
     "test_group": "批量测试此模型组",
-    "batch_test_title": "{{group}} 模型组测试"
+    "batch_test_title": "{{group}} CCR 可用性测试"
   }
 }

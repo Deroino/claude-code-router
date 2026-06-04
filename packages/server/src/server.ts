@@ -32,31 +32,9 @@ import { batchTestService } from "./batch-test-service";
 import { canonicalizeExternalConfig } from "@CCR/shared";
 // requestStatsService and ConfigService are imported at the top level
 
-// Helper functions to detect and handle compressed/garbled error responses
-function isCompressedError(text: string): boolean {
-  // Detect gzip compression magic number (0x1f8b) or other compression markers
-  return text.charCodeAt(0) === 0x1F ||
-         text.includes('\u001f') ||
-         text.includes('\ufffd') ||
-         (text.length > 0 && text.charCodeAt(0) === 31) ||
-         // Also detect excessive non-printable characters which might indicate binary data
-         (text.length > 0 && text.match(/[^\x20-\x7E\s]/g)?.length! > text.length * 0.3);
-}
-
-function replaceCompressedError(text: string, provider: string, model: string, status: number): any {
-  // Return structured error object instead of garbled text
-  const errorMsg = `模型 "${model}" (提供商: ${provider}) 返回了无法解析的错误；状态码: ${status}`;
-  return {
-    message: errorMsg,
-    type: 'provider_error',
-    code: 'invalid_response',
-    status: status,
-    detail: '可能是网络或编码问题，请检查模型配置或稍后重试',
-    originalSize: text.length,
-    note: '原始错误信息为压缩数据或二进制格式，无法显示',
-    hint: '请确认该模型已被提供商正确配置并支持'
-  };
-}
+const CCR_MODEL_TEST_TIMEOUT_MS = 20_000;
+const CCR_TEST_KEY_INDEX_HEADER = "x-ccr-test-key-index";
+const CCR_TEST_DISABLE_FALLBACK_HEADER = "x-ccr-test-disable-fallback";
 
 function serializeRequestStatsItem(key: string, value: any, includeDetails = false) {
   const parsed = parseStatsKey(key);
@@ -266,74 +244,6 @@ export const createServer = async (config: any): Promise<any> => {
   });
 
   /**
-   * Process transformer result, extracting body and config if present
-   * Handles both simple return (body only) and structured return (body + config)
-   */
-  function processTransformerResult(
-    result: any,
-    currentBody: any,
-    currentConfig: any
-  ): { body: any; config: any } {
-    // Check if result has structure { body: ..., config: ... }
-    if (result && typeof result === 'object' && result.body) {
-      // Structured return - extract body and merge config
-      const newConfig = { ...currentConfig };
-      if (result.config) {
-        newConfig.headers = {
-          ...(currentConfig.headers || {}),
-          ...(result.config.headers || {})
-        };
-        if (result.config.url) {
-          newConfig.url = result.config.url;
-        }
-      }
-      return { body: result.body, config: newConfig };
-    }
-    // Simple return - just update body
-    return { body: result, config: currentConfig };
-  }
-
-  /**
-   * Build request headers, merging transformer headers with default authentication
-   * Cleans up headers with 'undefined' values
-   */
-  function buildRequestHeaders(
-    apiKey: string,
-    transformerHeaders: Record<string, string | undefined> = {}
-  ): Record<string, string> {
-    const headers: Record<string, string | undefined> = {
-      "Content-Type": "application/json",
-    };
-
-    // Only add default Authorization if transformer didn't set x-api-key
-    // and didn't explicitly set authorization to undefined
-    const hasXApiKey = transformerHeaders["x-api-key"] || transformerHeaders["X-API-Key"];
-    const authExplicitlyRemoved = ("authorization" in transformerHeaders && transformerHeaders.authorization === undefined)
-                               || ("Authorization" in transformerHeaders && transformerHeaders.Authorization === undefined);
-
-    if (!hasXApiKey && !authExplicitlyRemoved) {
-      headers.Authorization = `Bearer ${apiKey}`;
-    }
-
-    // Merge transformer headers
-    for (const [key, value] of Object.entries(transformerHeaders)) {
-      if (value !== undefined && value !== "undefined") {
-        headers[key] = value;
-      }
-    }
-
-    // Clean up headers with 'undefined' values or containing "undefined"
-    for (const key in headers) {
-      if (headers[key] === "undefined" || headers[key] === undefined ||
-          (["authorization", "Authorization"].includes(key) && headers[key]?.includes("undefined"))) {
-        delete headers[key];
-      }
-    }
-
-    return headers as Record<string, string>;
-  }
-
-  /**
    * Extract response content from various response formats
    * Supports: OpenAI format, Anthropic format, and generic formats
    */
@@ -385,6 +295,26 @@ export const createServer = async (config: any): Promise<any> => {
     return '';
   }
 
+  function parseResponsePayload(payload: string): any {
+    if (!payload) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(payload);
+    } catch {
+      return payload;
+    }
+  }
+
+  function normalizeErrorPayload(payload: any): any {
+    if (!payload || typeof payload !== "object") {
+      return payload || "Unknown error";
+    }
+
+    return payload.error || payload;
+  }
+
   /**
    * Execute a single model test, reusable by both the API route and BatchTestService.
    * Returns a result object without touching reply - caller handles HTTP response.
@@ -396,12 +326,7 @@ export const createServer = async (config: any): Promise<any> => {
     message?: string,
     externalSignal?: AbortSignal,
     specificKeyIndex?: number
-  ): Promise<{ success: boolean; status?: number; response?: string; error?: string; rawResponse?: any; debug?: any; keyIndex?: number }> {
-    let providerData: any;
-    let processedRequest: any;
-    let requestConfig: any = {};
-    let selectedKeyIndex: number = 0;
-
+  ): Promise<{ success: boolean; status?: number; response?: string; error?: any; rawResponse?: any; debug?: any; keyIndex?: number }> {
     const serverInstance = (app as any)._server;
     const providerService = serverInstance?.providerService;
 
@@ -409,7 +334,7 @@ export const createServer = async (config: any): Promise<any> => {
       return { success: false, error: "Service is initializing, please try again later" };
     }
 
-    providerData = providerService.getProvider(provider);
+    let providerData = providerService.getProvider(provider);
     if (!providerData) {
       // Reload config and retry once
       providerService.reload();
@@ -422,212 +347,120 @@ export const createServer = async (config: any): Promise<any> => {
     // Model name validation removed: if the model name is wrong,
     // the upstream API will return its own error message.
 
+    const configService = serverInstance.configService as ConfigService;
+    const testMessage = message || configService.get("TEST_PROMPT") || "Hello, please respond with 'OK' if you can understand this message.";
+    const requestedModel = `${provider},${model}`;
+    const debug = {
+      mode: "ccr-v1-messages",
+      entrypoint: "/v1/messages",
+      requestedModel,
+      ...(specificKeyIndex !== undefined ? { keyIndex: specificKeyIndex } : {}),
+    };
+
+    if (externalSignal?.aborted) {
+      return { success: false, status: 499, error: "Cancelled", debug };
+    }
+
+    let timedOut = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, CCR_MODEL_TEST_TIMEOUT_MS);
+    const onExternalAbort = () => controller.abort();
+    externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+
     try {
-      // Construct test request
-      const configService = serverInstance.configService;
-      const testMessage = message || configService.get("TEST_PROMPT") || "Hello, please respond with 'OK' if you can understand this message.";
       const requestBody = {
-        model: model,
+        model: requestedModel,
         messages: [{ role: "user", content: testMessage }],
         max_tokens: 300,
         stream: false
       };
 
-      // Apply provider transformers if configured
-      processedRequest = requestBody;
-      requestConfig = {};
-
-      if (providerData.transformer?.use) {
-        for (const transformer of providerData.transformer.use) {
-          if (transformer && typeof transformer.transformRequestIn === "function") {
-            const transformResult = await transformer.transformRequestIn(processedRequest, providerData, {});
-            const { body, config } = processTransformerResult(transformResult, processedRequest, requestConfig);
-            processedRequest = body;
-            requestConfig = config;
-          }
-        }
-      }
-
-      // Apply model-specific transformers if configured
-      if (providerData.transformer?.[model]?.use) {
-        for (const transformer of providerData.transformer[model].use) {
-          if (transformer && typeof transformer.transformRequestIn === "function") {
-            const transformResult = await transformer.transformRequestIn(processedRequest, providerData, {});
-            const { body, config } = processTransformerResult(transformResult, processedRequest, requestConfig);
-            processedRequest = body;
-            requestConfig = config;
-          }
-        }
-      }
-
-      // Apply auth method from transformers (use resolvedProvider for transformer compat)
-      // Resolve API key - use specific key if provided, otherwise round-robin
-      let selectedApiKey: string;
-      if (specificKeyIndex !== undefined && Array.isArray(providerData.apiKey)) {
-        // Direct key selection by index
-        const entry = providerData.apiKey[specificKeyIndex];
-        selectedApiKey = typeof entry === 'string' ? entry : (entry?.key || '');
-        selectedKeyIndex = specificKeyIndex;
-      } else {
-        const resolvedKey = providerService.getApiKey(
-          providerData.name,
-          providerData.apiKey,
-          model,
-          providerData.models
-        );
-        selectedApiKey = resolvedKey.key;
-        selectedKeyIndex = resolvedKey.keyIndex;
-      }
-      const resolvedProviderData = { ...providerData, apiKey: selectedApiKey };
-
-      for (const transformer of providerData.transformer?.use || []) {
-        if (transformer && typeof transformer.auth === "function") {
-          const authResult = await transformer.auth(processedRequest, resolvedProviderData, {});
-          if (authResult?.body) {
-            const { body, config } = processTransformerResult(authResult, processedRequest, requestConfig);
-            processedRequest = body;
-            if (config?.headers) {
-              requestConfig.headers = { ...(requestConfig.headers || {}), ...config.headers };
-            }
-          }
-        }
-      }
-
-      for (const transformer of providerData.transformer?.[model]?.use || []) {
-        if (transformer && typeof transformer.auth === "function") {
-          const authResult = await transformer.auth(processedRequest, resolvedProviderData, {});
-          if (authResult?.body) {
-            const { body, config } = processTransformerResult(authResult, processedRequest, requestConfig);
-            processedRequest = body;
-            if (config?.headers) {
-              requestConfig.headers = { ...(requestConfig.headers || {}), ...config.headers };
-            }
-          }
-        }
-      }
-
-      // Build target URL with transformer endPoint support
-      let targetUrl = requestConfig.url || providerData.baseUrl;
-
-      if (!requestConfig.url && providerData.transformer?.use) {
-        for (const transformer of providerData.transformer.use) {
-          if (transformer && transformer.endPoint) {
-            const baseUrl = targetUrl.replace(/\/$/, '');
-            const endPoint = transformer.endPoint.replace(/^\//, '');
-            targetUrl = `${baseUrl}/${endPoint}`;
-            break;
-          }
-        }
-      }
-
-      if (!requestConfig.url && providerData.transformer?.[model]?.use) {
-        for (const transformer of providerData.transformer[model].use) {
-          if (transformer && transformer.endPoint) {
-            const baseUrl = targetUrl.replace(/\/$/, '');
-            const endPoint = transformer.endPoint.replace(/^\//, '');
-            targetUrl = `${baseUrl}/${endPoint}`;
-            break;
-          }
-        }
-      }
-
-      // Build request headers with the already-resolved API key
-      const requestHeaders = buildRequestHeaders(selectedApiKey, requestConfig.headers || {});
-
-      // Create AbortController for timeout, link with external signal
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000);
-
-      // If external signal is already aborted, abort immediately
-      if (externalSignal?.aborted) {
-        clearTimeout(timeout);
-        return { success: false, status: 499, error: "Cancelled" };
-      }
-
-      // Listen for external abort
-      const onExternalAbort = () => controller.abort();
-      externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
-
-      const fetchOptions: RequestInit = {
-        method: "POST",
-        headers: requestHeaders,
-        body: JSON.stringify(processedRequest),
-        signal: controller.signal
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        [CCR_TEST_DISABLE_FALLBACK_HEADER]: "true",
       };
 
-      const configService2 = serverInstance.configService;
-      const httpsProxy = configService2.getHttpsProxy();
-      if (httpsProxy) {
-        (fetchOptions as any).dispatcher = new ProxyAgent(httpsProxy);
+      const localApiKey = configService.get<string>("APIKEY");
+      if (localApiKey) {
+        headers["x-api-key"] = localApiKey;
       }
 
-      const response = await fetch(targetUrl, fetchOptions);
-      clearTimeout(timeout);
-      externalSignal?.removeEventListener('abort', onExternalAbort);
+      if (specificKeyIndex !== undefined) {
+        headers[CCR_TEST_KEY_INDEX_HEADER] = String(specificKeyIndex);
+      }
 
-      if (response.ok) {
-        const data = await response.json();
-        let responseText = extractResponseContent(data);
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/messages",
+        headers,
+        payload: requestBody,
+        signal: controller.signal,
+      } as any);
+
+      const data = parseResponsePayload(response.payload);
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        const responseText = extractResponseContent(data);
         const trimmedResponse = responseText.trim();
 
         if (!trimmedResponse) {
-          const errorMessage = `Model returned empty response. Raw response: ${JSON.stringify(data)}`;
-          requestStatsService.recordFailure(provider, model, processedRequest, errorMessage, 200);
-          requestStatsService.recordKeyFailure(provider, selectedKeyIndex, model, processedRequest, errorMessage, 200);
           return {
             success: false,
+            status: response.statusCode,
             error: "Model returned empty response",
             rawResponse: data,
             debug: {
-              message: "Response extraction failed or content was empty",
+              ...debug,
+              detail: "Response extraction failed or content was empty",
               responseStructure: Object.keys(data),
               extractedText: responseText
-            }
+            },
+            ...(specificKeyIndex !== undefined ? { keyIndex: specificKeyIndex } : {}),
           };
         }
 
-        requestStatsService.recordSuccess(provider, model, processedRequest, data);
-        requestStatsService.recordKeySuccess(provider, selectedKeyIndex, model, processedRequest, data);
-        return { success: true, status: response.status, response: responseText, keyIndex: selectedKeyIndex };
-      } else {
-        const errorText = await response.text();
-        let errorData: any = errorText;
-
-        if (isCompressedError(errorText)) {
-          errorData = replaceCompressedError(errorText, provider, model, response.status);
-        } else {
-          try { errorData = JSON.parse(errorText); } catch (e) { /* keep as is */ }
-        }
-
-        requestStatsService.recordFailure(provider, model, processedRequest, errorText, response.status);
-        requestStatsService.recordKeyFailure(provider, selectedKeyIndex, model, processedRequest, errorText, response.status);
-        return { success: false, status: response.status, error: errorData };
+        return {
+          success: true,
+          status: response.statusCode,
+          response: responseText,
+          rawResponse: data,
+          debug,
+          ...(specificKeyIndex !== undefined ? { keyIndex: specificKeyIndex } : {}),
+        };
       }
+
+      return {
+        success: false,
+        status: response.statusCode,
+        error: normalizeErrorPayload(data),
+        rawResponse: data,
+        debug,
+        ...(specificKeyIndex !== undefined ? { keyIndex: specificKeyIndex } : {}),
+      };
     } catch (error: any) {
-      if (error.name === 'AbortError') {
+      if (error.name === 'AbortError' || error.code === 'ABORT_ERR') {
         // Distinguish between timeout and external cancellation
         if (externalSignal?.aborted) {
-          return { success: false, status: 499, error: "Cancelled" };
+          return { success: false, status: 499, error: "Cancelled", debug };
         }
-        requestStatsService.recordFailure(provider, model, processedRequest || {}, "Request timeout (20 seconds)", 504);
-        requestStatsService.recordKeyFailure(provider, selectedKeyIndex, model, processedRequest || {}, "Request timeout (20 seconds)", 504);
-        return { success: false, status: 504, error: "Request timeout (20 seconds)" };
+        if (timedOut) {
+          return { success: false, status: 504, error: "Request timeout (20 seconds)", debug };
+        }
       }
 
-      const targetUrl = requestConfig?.url || providerData?.baseUrl || 'unknown';
-      let errorDetail = `Failed to connect to provider API at ${targetUrl}`;
+      let errorDetail = `CCR model test failed for ${requestedModel}`;
       if (error.cause) errorDetail += `\nCause: ${error.cause}`;
       if (error.code) errorDetail += `\nError code: ${error.code}`;
       errorDetail += `\nOriginal error: ${error.message || 'Unknown error'}`;
 
-      requestStatsService.recordFailure(provider, model, processedRequest || {}, errorDetail, 500);
-      requestStatsService.recordKeyFailure(provider, selectedKeyIndex, model, processedRequest || {}, errorDetail, 500);
-      return { success: false, status: 500, error: errorDetail };
+      return { success: false, status: 500, error: errorDetail, debug };
+    } finally {
+      clearTimeout(timeout);
+      externalSignal?.removeEventListener('abort', onExternalAbort);
     }
   }
-
-  // Expose executeModelTest for BatchTestService
-  (app as any).executeModelTest = executeModelTest;
 
   // Add endpoint to test a specific provider+model (delegates to executeModelTest)
   app.post("/api/model-test", async (req: any, reply: any) => {

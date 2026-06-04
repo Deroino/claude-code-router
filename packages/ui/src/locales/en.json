@@ -138,11 +138,11 @@
     "name_duplicate": "A provider with this name already exists",
     "search": "Search providers...",
     "add_api_key": "Add API Key",
-    "test": "Test",
+    "test": "CCR Test",
     "clear_request_stats": "Clear Counts",
     "clear_request_stats_success": "Request counts cleared",
     "clear_request_stats_failed": "Failed to clear request counts",
-    "provider_batch_test_title": "{{provider}} Batch Test",
+    "provider_batch_test_title": "{{provider}} CCR Availability Test",
     "provider_removed_cleanup_failed": "Provider removed, but some persisted test data could not be cleared",
     "unnamed_provider": "Unnamed Provider"
 
@@ -162,7 +162,7 @@
     "searchModel": "Search model...",
     "noModelFound": "No model found.",
     "test_selected": "Test Selected",
-    "batch_test_title": "Router Model Tests"
+    "batch_test_title": "Router CCR Availability Tests"
   },
   "json_editor": {
     "title": "JSON Editor",
@@ -442,7 +442,7 @@
     "waiting": "Waiting for requests..."
   },
   "batch_test": {
-    "title": "Batch Test Results",
+    "title": "CCR Availability Test Results",
     "testing": "Testing...",
     "remaining": "({{count}} remaining)",
     "all": "All",
@@ -461,7 +461,7 @@
     "clear_results_failed": "Failed to clear batch test results",
     "selected": "{{count}} selected",
     "close": "Close",
-    "run_selected": "Run Selected Tests",
+    "run_selected": "Run CCR Availability Tests",
     "retry": "Retry",
     "success_status": "Success",
     "failed_status": "Failed",
@@ -593,6 +593,6 @@
     "in_use_warning": "This group is currently in use by router",
     "model_already_added": "This model is already in the group",
     "test_group": "Batch test this group",
-    "batch_test_title": "{{group}} Model Group Tests"
+    "batch_test_title": "{{group}} CCR Availability Tests"
   }
 }

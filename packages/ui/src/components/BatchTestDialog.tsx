@@ -16,6 +16,15 @@ export interface BatchTestResult {
   status: "success" | "error" | "pending" | "testing" | "idle" | "cancelled";
   message?: string;
   response?: string;
+  statusCode?: number;
+  rawResponse?: unknown;
+  debug?: {
+    mode?: string;
+    entrypoint?: string;
+    requestedModel?: string;
+    keyIndex?: number;
+    [key: string]: unknown;
+  };
   timestamp?: number;
 }
 
@@ -44,7 +53,7 @@ function getBatchTestResultKey(result: { provider: string; model: string; keyInd
 function classifyError(result: BatchTestResult): ErrorType {
   if (result.status !== "error") return "unknown";
 
-  const errorText = extractStrings([result.message, result.response])
+  const errorText = extractStrings([result.message, result.response, result.rawResponse])
     .join(" ")
     .toLowerCase();
 
@@ -996,6 +1005,17 @@ export function BatchTestDialog({
                                   {result.response && (
                                     <div className="text-xs text-gray-500 max-w-xs truncate" title={typeof result.response === 'string' ? result.response : JSON.stringify(result.response)}>
                                       {typeof result.response === 'string' ? result.response : JSON.stringify(result.response)}
+                                    </div>
+                                  )}
+                                  {(result.debug || result.statusCode) && (
+                                    <div
+                                      className="text-[11px] text-gray-400 max-w-xs truncate"
+                                      title={JSON.stringify({ status: result.statusCode, debug: result.debug })}
+                                    >
+                                      {result.debug?.mode || "ccr-test"}
+                                      {result.debug?.entrypoint ? ` ${result.debug.entrypoint}` : ""}
+                                      {result.debug?.requestedModel ? ` -> ${result.debug.requestedModel}` : ""}
+                                      {result.statusCode ? ` (HTTP ${result.statusCode})` : ""}
                                     </div>
                                   )}
                                   {result.timestamp && (

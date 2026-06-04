@@ -270,8 +270,8 @@ class ApiClient {
   }
 
   // Test a specific provider+model
-  async testModel(provider: string, model: string, message?: string, keyIndex?: number): Promise<{ success: boolean; status?: number; response?: string; error?: string; rawResponse?: any; debug?: any }> {
-    return this.post<{ success: boolean; status?: number; response?: string; error?: string; rawResponse?: any; debug?: any }>("/model-test", {
+  async testModel(provider: string, model: string, message?: string, keyIndex?: number): Promise<{ success: boolean; status?: number; response?: string; error?: unknown; rawResponse?: unknown; debug?: unknown }> {
+    return this.post<{ success: boolean; status?: number; response?: string; error?: unknown; rawResponse?: unknown; debug?: unknown }>("/model-test", {
       provider,
       model,
       message,

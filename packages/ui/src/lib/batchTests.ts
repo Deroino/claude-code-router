@@ -41,6 +41,9 @@ export function markBatchTestsAsTesting(
       status: "testing" as const,
       message: undefined,
       response: undefined,
+      statusCode: undefined,
+      rawResponse: undefined,
+      debug: undefined,
       timestamp: Date.now(),
     };
   });

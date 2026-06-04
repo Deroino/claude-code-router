@@ -326,7 +326,13 @@ export class ProviderService {
    * 4. Round-robin among remaining eligible keys
    * 5. Fallback: if all unhealthy, use all model-eligible keys
    */
-  getApiKey(providerName: string, apiKey: ApiKeyConfig, targetModel?: string, providerModels?: string[]): ResolvedApiKey {
+  getApiKey(
+    providerName: string,
+    apiKey: ApiKeyConfig,
+    targetModel?: string,
+    providerModels?: string[],
+    specificKeyIndex?: number
+  ): ResolvedApiKey {
     // Single string key - no rotation needed
     if (typeof apiKey === 'string') {
       return { key: apiKey, keyIndex: 0 };
@@ -339,6 +345,28 @@ export class ProviderService {
       // Should not happen with valid config, but safety fallback
       this.logger.warn(`No valid API keys found for provider ${providerName}`);
       return { key: '', keyIndex: 0 };
+    }
+
+    if (specificKeyIndex !== undefined) {
+      const selected = entries.find(e => e.index === specificKeyIndex);
+      if (!selected) {
+        this.logger.warn(
+          `API key index ${specificKeyIndex} not found for provider ${providerName}`
+        );
+        return { key: '', keyIndex: specificKeyIndex };
+      }
+
+      if (
+        targetModel &&
+        selected.models !== null &&
+        !selected.models.includes(targetModel)
+      ) {
+        this.logger.warn(
+          `API key index ${specificKeyIndex} for provider ${providerName} does not explicitly support model ${targetModel}`
+        );
+      }
+
+      return { key: selected.key, keyIndex: selected.index };
     }
 
     // Step 1: Filter by model support

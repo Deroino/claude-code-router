@@ -19,6 +19,9 @@ import {
   mergeClaudeCodeRequestQuery,
 } from "@/utils/claude-code";
 
+const CCR_TEST_KEY_INDEX_HEADER = "x-ccr-test-key-index";
+const CCR_TEST_DISABLE_FALLBACK_HEADER = "x-ccr-test-disable-fallback";
+
 // Extend FastifyInstance to include custom services
 declare module "fastify" {
   interface FastifyInstance {
@@ -30,6 +33,67 @@ declare module "fastify" {
   interface FastifyRequest {
     provider?: string;
   }
+}
+
+function getHeaderValue(
+  headers: Record<string, unknown> | undefined,
+  name: string
+): string | undefined {
+  if (!headers) {
+    return undefined;
+  }
+
+  const value = headers[name] ?? headers[name.toLowerCase()];
+  if (Array.isArray(value)) {
+    return typeof value[0] === "string" ? value[0] : undefined;
+  }
+
+  return typeof value === "string" ? value : undefined;
+}
+
+function getTestKeyIndex(headers: Record<string, unknown> | undefined): number | undefined {
+  const rawValue = getHeaderValue(headers, CCR_TEST_KEY_INDEX_HEADER);
+  if (rawValue === undefined || rawValue === "") {
+    return undefined;
+  }
+
+  const keyIndex = Number(rawValue);
+  return Number.isInteger(keyIndex) && keyIndex >= 0 ? keyIndex : undefined;
+}
+
+function shouldDisableFallback(headers: Record<string, unknown> | undefined): boolean {
+  return getHeaderValue(headers, CCR_TEST_DISABLE_FALLBACK_HEADER) === "true";
+}
+
+function removeInternalTestHeaders(headers: Record<string, unknown>): void {
+  for (const key of Object.keys(headers)) {
+    const lowerKey = key.toLowerCase();
+    if (
+      lowerKey === CCR_TEST_KEY_INDEX_HEADER ||
+      lowerKey === CCR_TEST_DISABLE_FALLBACK_HEADER
+    ) {
+      delete headers[key];
+    }
+  }
+}
+
+function cloneHeadersForUpstream(headers: any): any {
+  if (headers instanceof Headers) {
+    const clonedHeaders = new Headers(headers);
+    clonedHeaders.delete("content-length");
+    clonedHeaders.delete(CCR_TEST_KEY_INDEX_HEADER);
+    clonedHeaders.delete(CCR_TEST_DISABLE_FALLBACK_HEADER);
+    return clonedHeaders;
+  }
+
+  const clonedHeaders: Record<string, unknown> = { ...(headers || {}) };
+  for (const key of Object.keys(clonedHeaders)) {
+    if (key.toLowerCase() === "content-length") {
+      delete clonedHeaders[key];
+    }
+  }
+  removeInternalTestHeaders(clonedHeaders);
+  return clonedHeaders;
 }
 
 /**
@@ -97,7 +161,10 @@ async function handleTransformerEndpoint(
     return formatResponse(finalResponse, reply, body);
   } catch (error: any) {
     // Handle fallback if error occurs
-    if (error.code === 'provider_response_error') {
+    if (
+      error.code === 'provider_response_error' &&
+      !shouldDisableFallback(req.headers as Record<string, unknown>)
+    ) {
       const fallbackResult = await handleFallback(req, reply, fastify, transformer, error);
       if (fallbackResult) {
         return fallbackResult;
@@ -230,12 +297,7 @@ async function processRequestTransformers(
   bypass = shouldBypassTransformers(provider, transformer, body);
 
   if (bypass) {
-    if (headers instanceof Headers) {
-      headers.delete("content-length");
-    } else {
-      delete headers["content-length"];
-    }
-    config.headers = headers;
+    config.headers = cloneHeadersForUpstream(headers);
   }
 
   // Execute transformer's transformRequestOut method
@@ -342,6 +404,14 @@ function sanitizeRequestHeaders(
   };
 
   for (const [key, value] of Object.entries(headers)) {
+    const lowerKey = key.toLowerCase();
+    if (
+      lowerKey === CCR_TEST_KEY_INDEX_HEADER ||
+      lowerKey === CCR_TEST_DISABLE_FALLBACK_HEADER
+    ) {
+      continue;
+    }
+
     if (disabledHeaderNames.has(key.toLowerCase())) {
       continue;
     }
@@ -392,7 +462,8 @@ async function sendRequestToProvider(
     provider.name,
     provider.apiKey,
     requestBody.model,
-    provider.models
+    provider.models,
+    getTestKeyIndex(context?.req?.headers as Record<string, unknown>)
   );
   const selectedApiKey = resolvedKey.key;
   const selectedKeyIndex = resolvedKey.keyIndex;
