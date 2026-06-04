@@ -41,10 +41,17 @@
   "pnpm": {
     "overrides": {
       "@types/react": "18"
+    },
+    "patchedDependencies": {
+      "@radix-ui/react-presence@1.1.5": "patches/@radix-ui__react-presence@1.1.5.patch",
+      "@radix-ui/react-compose-refs@1.1.2": "patches/@radix-ui__react-compose-refs@1.1.2.patch"
     }
   },
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=8.0.0"
+  },
+  "dependencies": {
+    "pnpm": "^10.28.2"
   }
 }

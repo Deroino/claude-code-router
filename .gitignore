@@ -5,8 +5,13 @@ log.txt
 dist
 .DS_Store
 .vscode
+.antigravitycli/
 tsconfig.tsbuildinfo
+llms
 
 # Documentation build output
 docs/build
 docs/.docusaurus
+
+package-lock.json
+ui/tsconfig.tsbuildinfo

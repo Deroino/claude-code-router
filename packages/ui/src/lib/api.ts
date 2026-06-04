@@ -75,10 +75,13 @@ class ApiClient {
   private async apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
 
+    // Only set Content-Type if there is a body
+    const contentType = options.body ? 'application/json' : '';
+
     const config: RequestInit = {
       ...options,
       headers: {
-        ...this.createHeaders(),
+        ...this.createHeaders(contentType),
         ...options.headers,
       },
     };
@@ -94,34 +97,68 @@ class ApiClient {
         // For memory router, we need to use the router instance
         // We'll dispatch a custom event that the app can listen to
         window.dispatchEvent(new CustomEvent('unauthorized'));
-        // Return a promise that never resolves to prevent further execution
-        return new Promise(() => {}) as Promise<T>;
+        // Throw error instead of returning a never-resolving Promise
+        // A never-resolving Promise causes Promise.all to hang forever (e.g. batch test)
+        throw new Error('Unauthorized: API key is invalid or missing');
       }
 
+      const text = await response.text();
+
       if (!response.ok) {
-        // Try to get detailed error message from response body
-        let errorMessage = `API request failed: ${response.status} ${response.statusText}`;
-        try {
-          const errorData = await response.json();
-          if (errorData.error || errorData.message) {
-            errorMessage = errorData.message || errorData.error || errorMessage;
-          }
-        } catch {
-          // If parsing fails, use default error message
-        }
-        throw new Error(errorMessage);
+        const error: Error & { status?: number; statusText?: string; body?: string } = new Error(
+          `API request failed: ${response.status} ${response.statusText}`
+        );
+        error.status = response.status;
+        error.statusText = response.statusText;
+        error.body = text || undefined;
+        throw error;
       }
 
       if (response.status === 204) {
         return {} as T;
       }
 
-      const text = await response.text();
       return text ? JSON.parse(text) : ({} as T);
 
     } catch (error) {
       console.error('API request error:', error);
-      throw error;
+
+      // Enhance error with more details
+      const enhancedError = error as Error & { status?: number; statusText?: string; body?: string; cause?: string };
+
+      // Check if it's a network-level fetch error
+      if (error instanceof TypeError && error.message === 'Failed to fetch') {
+        (enhancedError as any).cause = 'Network error - unable to connect to server. Possible causes: CORS, DNS failure, or server is unreachable.';
+        (enhancedError as any).body = JSON.stringify({
+          error: 'Network error',
+          message: 'Unable to connect to the server. This could be due to:',
+          reasons: [
+            'CORS (Cross-Origin Resource Sharing) restrictions',
+            'DNS resolution failure',
+            'Server is down or unreachable',
+            'Network connectivity issues',
+            'SSL/TLS certificate errors'
+          ]
+        });
+        enhancedError.status = 0;
+        enhancedError.statusText = 'Network Error';
+      } else if (error instanceof TypeError && error.message === 'fetch failed') {
+        (enhancedError as any).cause = 'Network request failed - check server connectivity and CORS settings.';
+        (enhancedError as any).body = JSON.stringify({
+          error: 'Request failed',
+          message: 'The network request failed. Possible reasons:',
+          reasons: [
+            'CORS policy blocked the request',
+            'Server returned invalid response',
+            'Connection was interrupted',
+            'Proxy or firewall blocking the request'
+          ]
+        });
+        enhancedError.status = 0;
+        enhancedError.statusText = 'Request Failed';
+      }
+
+      throw enhancedError;
     }
   }
 
@@ -232,6 +269,26 @@ class ApiClient {
     return this.post<{ success: boolean; message: string }>('/api/update/perform', {});
   }
 
+  // Test a specific provider+model
+  async testModel(provider: string, model: string, message?: string, keyIndex?: number): Promise<{ success: boolean; status?: number; response?: string; error?: unknown; rawResponse?: unknown; debug?: unknown }> {
+    return this.post<{ success: boolean; status?: number; response?: string; error?: unknown; rawResponse?: unknown; debug?: unknown }>("/model-test", {
+      provider,
+      model,
+      message,
+      ...(keyIndex !== undefined && { keyIndex }),
+    });
+  }
+
+  // Test provider URL connectivity
+  async testConnectivity(url: string): Promise<{ success: boolean; latency_ms: number; status?: number; error?: string }> {
+    return this.post<{ success: boolean; latency_ms: number; status?: number; error?: string }>("/connectivity-test", { url });
+  }
+
+  // Fetch models from provider (server-side proxy to avoid CORS)
+  async fetchModels(api_base_url: string, api_key?: string, forceStandard?: boolean): Promise<{ success: boolean; type?: string; data?: any; error?: string }> {
+    return this.post<{ success: boolean; type?: string; data?: any; error?: string }>("/fetch-models", { api_base_url, api_key, forceStandard });
+  }
+
   // Get log files list
   async getLogFiles(): Promise<Array<{ name: string; path: string; size: number; lastModified: string }>> {
     return this.get<Array<{ name: string; path: string; size: number; lastModified: string }>>('/logs/files');
@@ -245,6 +302,11 @@ class ApiClient {
   // Clear logs from specific file
   async clearLogs(filePath: string): Promise<void> {
     return this.delete<void>(`/logs?file=${encodeURIComponent(filePath)}`);
+  }
+
+  // Clear all log files
+  async clearAllLogs(): Promise<void> {
+    return this.delete<void>('/logs/all');
   }
 
   // ========== Preset API methods ==========
@@ -322,6 +384,79 @@ class ApiClient {
   // Install preset from GitHub repository
   async installPresetFromGitHub(repo: string, name?: string): Promise<any> {
     return this.post<any>('/presets/install/github', { repo, name });
+  }
+
+  // ========== Batch Test Results API ==========
+
+  // Get batch test results from server
+  async getBatchTestResults(): Promise<{ results: any[]; startedAt?: number | null; completedAt?: number | null }> {
+    return this.get<{ results: any[]; startedAt?: number | null; completedAt?: number | null }>('/batch-test-results');
+  }
+
+  // Save batch test results to server (overwrites previous)
+  async saveBatchTestResults(results: any[]): Promise<{ success: boolean }> {
+    return this.put<{ success: boolean }>('/batch-test-results', { results });
+  }
+
+  // Clear all batch test results from server persistence
+  async clearBatchTestResults(): Promise<{ success: boolean; removed: number; error?: string }> {
+    return this.delete<{ success: boolean; removed: number; error?: string }>('/batch-test-results');
+  }
+
+  // Clear batch test results for one provider from server persistence
+  async clearProviderBatchTestResults(provider: string): Promise<{ success: boolean; removed: number; error?: string }> {
+    return this.delete<{ success: boolean; removed: number; error?: string }>(
+      `/batch-test-results/provider/${encodeURIComponent(provider)}`
+    );
+  }
+
+  // ========== Request Stats API ==========
+
+  async getRequestStatsDetail(key: string): Promise<{ stat: any }> {
+    return this.get<{ stat: any }>(`/request-stats/detail?key=${encodeURIComponent(key)}`);
+  }
+
+  async clearRequestStats(): Promise<{ success: boolean; message?: string }> {
+    return this.delete<{ success: boolean; message?: string }>('/request-stats');
+  }
+
+  async clearProviderRequestStats(provider: string): Promise<{ success: boolean; removed: number }> {
+    return this.delete<{ success: boolean; removed: number }>(
+      `/request-stats/provider/${encodeURIComponent(provider)}`
+    );
+  }
+
+  // ========== Backend Batch Test API ==========
+
+  // Start a batch test task on the backend
+  async startBatchTest(
+    tests: Array<{ provider: string; model: string; keyIndex?: number }>,
+    concurrency: number = 20
+  ): Promise<{ success: boolean; total?: number; concurrency?: number; error?: string }> {
+    return this.post<{ success: boolean; total?: number; concurrency?: number; error?: string }>(
+      '/batch-test/start',
+      { tests, concurrency }
+    );
+  }
+
+  // Get batch test task status from the backend
+  async getBatchTestStatus(): Promise<{
+    status: 'idle' | 'running' | 'cancelling' | 'completed';
+    progress: { completed: number; total: number };
+    concurrency: number;
+    startedAt: number | null;
+    completedAt: number | null;
+    results: any[];
+  }> {
+    return this.get('/batch-test/status');
+  }
+
+  // Cancel the running batch test task
+  async cancelBatchTest(): Promise<{ success: boolean; completed?: number; cancelled?: number; error?: string }> {
+    return this.post<{ success: boolean; completed?: number; cancelled?: number; error?: string }>(
+      '/batch-test/cancel',
+      {}
+    );
   }
 }
 

@@ -4,6 +4,21 @@
  */
 
 import path from 'path';
+
+function getProviderModelUnion(provider: any): string[] {
+  if (!provider || !Array.isArray(provider.api_key)) {
+    return [];
+  }
+
+  const union = new Set<string>();
+  provider.api_key.forEach((entry: any) => {
+    if (entry && typeof entry === 'object' && Array.isArray(entry.models)) {
+      entry.models.forEach((model: string) => union.add(model));
+    }
+  });
+
+  return Array.from(union);
+}
 import {
   RequiredInput,
   InputType,
@@ -194,11 +209,11 @@ export function getDynamicOptions(
         (p: any) => p.name === selectedProvider || p.id === selectedProvider
       );
 
-      if (!provider || !provider.models) {
+      if (!provider) {
         return [];
       }
 
-      return provider.models.map((model: string) => ({
+      return getProviderModelUnion(provider).map((model: string) => ({
         label: model,
         value: model,
       }));

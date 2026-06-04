@@ -7,6 +7,13 @@ import { CLAUDE_PROJECTS_DIR, HOME_DIR } from "@CCR/shared";
 import { LRUCache } from "lru-cache";
 import { ConfigService } from "../services/config";
 import { TokenizerService } from "../services/tokenizer";
+import { extractClaudeCodeSessionId } from "./claude-code";
+import {
+  isGroupReference,
+  parseGroupReference,
+  parseProviderModel,
+} from "../types/llm";
+import type { ModelGroup, RouterConfig, RouterScenarioType } from "../types/llm";
 
 // Types from @anthropic-ai/sdk
 interface Tool {
@@ -128,21 +135,26 @@ const getUseModel = async (
   lastUsage?: Usage | undefined
 ): Promise<{ model: string; scenarioType: RouterScenarioType }> => {
   const projectSpecificRouter = await getProjectSpecificRouter(req, configService);
-  const providers = configService.get<any[]>("providers") || [];
+  const providers = configService.get<any[]>("providers") || configService.get<any[]>("Providers") || [];
   const Router = projectSpecificRouter || configService.get("Router");
 
-  if (req.body.model.includes(",")) {
-    const [provider, model] = req.body.model.split(",");
-    const finalProvider = providers.find(
-      (p: any) => p.name.toLowerCase() === provider
-    );
-    const finalModel = finalProvider?.models?.find(
-      (m: any) => m.toLowerCase() === model
-    );
-    if (finalProvider && finalModel) {
-      return { model: `${finalProvider.name},${finalModel}`, scenarioType: 'default' };
+  // Detect compact requests by checking for the specific prompt pattern in the last user message
+  const COMPACT_PROMPT_MARKER = "create a detailed summary of the conversation";
+  if (Array.isArray(req.body.messages)) {
+    const lastUserMessage = req.body.messages.findLast((m: any) => m.role === "user");
+    if (lastUserMessage) {
+      const messageContent = typeof lastUserMessage.content === "string"
+        ? lastUserMessage.content
+        : (Array.isArray(lastUserMessage.content) ? lastUserMessage.content.map((c: any) => c.text).join(" ") : "");
+      if (messageContent.includes(COMPACT_PROMPT_MARKER) && Router?.compact) {
+        req.log.info(`Using compact model for summary request`);
+        return { model: Router.compact, scenarioType: 'compact' };
+      }
     }
-    return { model: req.body.model, scenarioType: 'default' };
+  }
+
+  if (parseProviderModel(req.body.model)) {
+    return { model: normalizeExplicitProviderModel(req.body.model, providers), scenarioType: 'default' };
   }
 
   // if tokenCount is greater than the configured threshold, use the long context model
@@ -158,20 +170,9 @@ const getUseModel = async (
     );
     return { model: Router.longContext, scenarioType: 'longContext' };
   }
-  if (
-    req.body?.system?.length > 1 &&
-    req.body?.system[1]?.text?.startsWith("<CCR-SUBAGENT-MODEL>")
-  ) {
-    const model = req.body?.system[1].text.match(
-      /<CCR-SUBAGENT-MODEL>(.*?)<\/CCR-SUBAGENT-MODEL>/s
-    );
-    if (model) {
-      req.body.system[1].text = req.body.system[1].text.replace(
-        `<CCR-SUBAGENT-MODEL>${model[1]}</CCR-SUBAGENT-MODEL>`,
-        ""
-      );
-      return { model: model[1], scenarioType: 'default' };
-    }
+  const subagentModel = tryResolveSubagentModelFromRequest(req, configService);
+  if (subagentModel) {
+    return { model: subagentModel, scenarioType: 'default' };
   }
   // Use the background model for any Claude Haiku variant
   const globalRouter = configService.get("Router");
@@ -183,6 +184,12 @@ const getUseModel = async (
     req.log.info(`Using background model for ${req.body.model}`);
     return { model: globalRouter.background, scenarioType: 'background' };
   }
+
+  if (isImageRequest(req) && Router?.image) {
+    req.log.info("Using image model for image request");
+    return { model: Router.image, scenarioType: 'image' };
+  }
+
   // The priority of websearch must be higher than thinking.
   if (
     Array.isArray(req.body.tools) &&
@@ -199,31 +206,275 @@ const getUseModel = async (
   return { model: Router?.default, scenarioType: 'default' };
 };
 
+function getTokenizerLookupModel(model: string | undefined, fallbackModel: string): string {
+  const candidate = model || fallbackModel;
+  if (parseProviderModel(candidate)) {
+    return candidate;
+  }
+
+  return fallbackModel;
+}
+
 export interface RouterContext {
   configService: ConfigService;
   tokenizerService?: TokenizerService;
   event?: any;
 }
 
-export type RouterScenarioType = 'default' | 'background' | 'think' | 'longContext' | 'webSearch';
+// Round-robin index for model groups
+const groupRotationIndex = new Map<string, number>();
 
-export interface RouterFallbackConfig {
-  default?: string[];
-  background?: string[];
-  think?: string[];
-  longContext?: string[];
-  webSearch?: string[];
+export function resetModelGroupRotationState(): void {
+  groupRotationIndex.clear();
 }
 
-export const router = async (req: any, _res: any, context: RouterContext) => {
-  const { configService, event } = context;
-  // Parse sessionId from metadata.user_id
-  if (req.body.metadata?.user_id) {
-    const parts = req.body.metadata.user_id.split("_session_");
-    if (parts.length > 1) {
-      req.sessionId = parts[1];
+/**
+ * Resolve a model group name to a specific "provider,model" string using round-robin.
+ * Returns null if the group is not found or is empty.
+ */
+function resolveModelGroup(
+  groupName: string,
+  configService: ConfigService,
+  req: any
+): string | null {
+  const groups = configService.get<ModelGroup[]>("ModelGroups") || [];
+  const group = groups.find(g => g.name === groupName);
+
+  if (!group) {
+    req.log.error(`ModelGroup '${groupName}' not found`);
+    return null;
+  }
+  if (!group.models || group.models.length === 0) {
+    req.log.error(`ModelGroup '${groupName}' has no models`);
+    return null;
+  }
+
+  const index = groupRotationIndex.get(groupName) || 0;
+  const selectedModel = group.models[index % group.models.length];
+  groupRotationIndex.set(groupName, index + 1);
+
+  req.log.info(`ModelGroup '${groupName}' selected: ${selectedModel} (index: ${index})`);
+  return selectedModel;
+}
+
+function resolveRouteModelValue(
+  value: string | undefined,
+  configService: ConfigService,
+  req: any,
+  options: {
+    fallbackToDefault?: boolean;
+    visitedGroups?: Set<string>;
+  } = {}
+): string | undefined {
+  if (!value) {
+    return value;
+  }
+
+  if (!isGroupReference(value)) {
+    return value;
+  }
+
+  const groupName = parseGroupReference(value);
+  if (!groupName) {
+    return value;
+  }
+
+  const visitedGroups = options.visitedGroups ?? new Set<string>();
+  if (visitedGroups.has(groupName)) {
+    req.log.error(`Detected recursive ModelGroup fallback for '${groupName}'`);
+    return undefined;
+  }
+  visitedGroups.add(groupName);
+
+  const resolved = resolveModelGroup(groupName, configService, req);
+  if (resolved) {
+    return resolved;
+  }
+
+  if (!options.fallbackToDefault) {
+    return undefined;
+  }
+
+  const routerConfig = configService.get<RouterConfig>("Router");
+  const defaultRoute = routerConfig?.default;
+  if (!defaultRoute || defaultRoute === value) {
+    req.log.error(`Cannot resolve ModelGroup '${groupName}' and no valid default model available`);
+    return undefined;
+  }
+
+  const fallbackResolved = resolveRouteModelValue(defaultRoute, configService, req, {
+    fallbackToDefault: false,
+    visitedGroups,
+  });
+
+  if (fallbackResolved) {
+    req.log.warn(`ModelGroup '${groupName}' resolution failed, falling back to default: ${fallbackResolved}`);
+  } else {
+    req.log.error(`Cannot resolve ModelGroup '${groupName}' and no valid default model available`);
+  }
+
+  return fallbackResolved;
+}
+
+function extractTaggedSubagentModel(text: string | undefined): string | null {
+  if (!text || !text.includes("<CCR-SUBAGENT-MODEL>")) {
+    return null;
+  }
+
+  const match = text.match(/<CCR-SUBAGENT-MODEL>(.*?)<\/CCR-SUBAGENT-MODEL>/s);
+  if (!match || match[1] === "provider,model") {
+    return null;
+  }
+
+  return match[1];
+}
+
+function removeTaggedSubagentModel(text: string, model: string): string {
+  return text.replace(`<CCR-SUBAGENT-MODEL>${model}</CCR-SUBAGENT-MODEL>`, "");
+}
+
+function resolveTaggedSubagentModel(
+  taggedModel: string,
+  configService: ConfigService,
+  req: any
+): string | undefined {
+  return resolveRouteModelValue(taggedModel, configService, req, {
+    fallbackToDefault: true,
+  }) || taggedModel;
+}
+
+function normalizeExplicitProviderModel(value: string, providers: any[]): string {
+  const parsed = parseProviderModel(value);
+  if (!parsed) {
+    return value;
+  }
+
+  const finalProvider = providers.find(
+    (p: any) => p.name.toLowerCase() === parsed.provider.toLowerCase()
+  );
+  const finalModel = finalProvider?.models?.find(
+    (m: any) => typeof m === "string" && m.toLowerCase() === parsed.model.toLowerCase()
+  );
+
+  if (finalProvider && finalModel) {
+    return `${finalProvider.name},${finalModel}`;
+  }
+
+  return value;
+}
+
+function isImageRequest(req: any): boolean {
+  return Array.isArray(req.body?.messages) && req.body.messages.some((message: any) => {
+    if (!Array.isArray(message?.content)) {
+      return false;
+    }
+
+    return message.content.some((part: any) => part?.type === "image" || part?.type === "image_url");
+  });
+}
+
+function getFirstUserTextMessageContent(req: any): string {
+  const firstUserMsg = req.body?.messages?.find((m: any) => m.role === "user");
+  if (!firstUserMsg?.content) {
+    return "";
+  }
+
+  return typeof firstUserMsg.content === "string"
+    ? firstUserMsg.content
+    : (Array.isArray(firstUserMsg.content)
+        ? firstUserMsg.content.find((c: any) => c.type === "text")?.text || ""
+        : "");
+}
+
+function tryResolveSubagentModelFromRequest(
+  req: any,
+  configService: ConfigService
+): string | undefined {
+  if (
+    req.body?.system?.length > 1 &&
+    typeof req.body?.system[1]?.text === "string"
+  ) {
+    const taggedModel = extractTaggedSubagentModel(req.body.system[1].text);
+    if (taggedModel) {
+      req.body.system[1].text = removeTaggedSubagentModel(req.body.system[1].text, taggedModel);
+      const resolved = resolveTaggedSubagentModel(taggedModel, configService, req);
+      req.log.info(`[SUBAGENT] Using model from system[1].text: ${resolved}`);
+      return resolved;
+    }
+    if (req.body.system[1].text.includes("<CCR-SUBAGENT-MODEL>provider,model</CCR-SUBAGENT-MODEL>")) {
+      req.log.info("[SUBAGENT] Ignoring placeholder 'provider,model' in system[1].text, falling back to regular routing.");
     }
   }
+
+  const firstUserMsg = req.body?.messages?.find((m: any) => m.role === "user");
+  const contentText = getFirstUserTextMessageContent(req);
+  if (contentText) {
+    const taggedModel = extractTaggedSubagentModel(contentText);
+    if (taggedModel) {
+      if (typeof firstUserMsg.content === "string") {
+        firstUserMsg.content = removeTaggedSubagentModel(firstUserMsg.content, taggedModel);
+      } else if (Array.isArray(firstUserMsg.content)) {
+        const textPart = firstUserMsg.content.find((c: any) => c.type === "text");
+        if (textPart) {
+          textPart.text = removeTaggedSubagentModel(textPart.text, taggedModel);
+        }
+      }
+
+      const resolved = resolveTaggedSubagentModel(taggedModel, configService, req);
+      req.log.info(`[SUBAGENT] Using model from user message: ${resolved}`);
+      return resolved;
+    }
+    if (contentText.includes("<CCR-SUBAGENT-MODEL>provider,model</CCR-SUBAGENT-MODEL>")) {
+      req.log.info("[SUBAGENT] Ignoring placeholder 'provider,model' in user message, falling back to regular routing.");
+    }
+  }
+
+  return undefined;
+}
+
+function finalizeRouteModel(
+  model: string | undefined,
+  configService: ConfigService,
+  req: any,
+  options: { fallbackToDefault?: boolean } = {}
+): string | undefined {
+  return resolveRouteModelValue(model, configService, req, {
+    fallbackToDefault: options.fallbackToDefault ?? true,
+  }) || model;
+}
+
+export const router = async (req: any, _res: any, context: RouterContext) => {  // --- vvv TEMPORARY DEBUGGING CODE vvv ---
+  const MAGIC_CODE = "CCR_DEBUG_COMPACT_REQUEST"; // 我们约定的魔法代码
+
+  let shouldLog = false;
+  if (req.body && Array.isArray(req.body.messages)) {
+    // 查找最后一条用户消息
+    // 使用 findLast 来确保找到的是真正的最后一个用户消息
+    const lastUserMessage = req.body.messages.findLast((m: any) => m.role === "user");
+
+    if (lastUserMessage && typeof lastUserMessage.content === "string" && lastUserMessage.content.includes(MAGIC_CODE)) {
+      shouldLog = true;
+      // 移除魔法代码，以免它被发送给真正的模型，污染上下文
+      lastUserMessage.content = lastUserMessage.content.replace(MAGIC_CODE, "").trim();
+      // 如果移除后消息内容为空，可以考虑删除这条消息，避免发送空消息给模型
+      if (!lastUserMessage.content) {
+        const index = req.body.messages.lastIndexOf(lastUserMessage);
+        if (index > -1) {
+          req.body.messages.splice(index, 1);
+        }
+      }
+    }
+  }
+
+  if (shouldLog) {
+    req.log.info("--- RAW REQUEST BODY (MAGIC CODE DETECTED) ---");
+    req.log.info(req.body, "Request Body");
+    req.log.info("--- END RAW REQUEST BODY ---");
+  }
+  // --- ^^^ TEMPORARY DEBUGGING CODE ^^^ ---
+
+  const { configService, event } = context;
+  req.sessionId = extractClaudeCodeSessionId(req.body.metadata?.user_id);
   const lastMessageUsage = sessionUsageCache.get(req.sessionId);
   const { messages, system = [], tools }: MessageCreateParamsBase = req.body;
   const rewritePrompt = configService.get("REWRITE_SYSTEM_PROMPT");
@@ -238,11 +489,14 @@ export const router = async (req: any, _res: any, context: RouterContext) => {
 
   try {
     // Try to get tokenizer config for the current model
-    const [providerName, modelName] = req.body.model.split(",");
-    const tokenizerConfig = context.tokenizerService?.getTokenizerConfigForModel(
-      providerName,
-      modelName
-    );
+    const tokenizerLookupModel = getTokenizerLookupModel(req.body.model, configService.get<RouterConfig>("Router")?.default || req.body.model);
+    const parsedTokenizerModel = parseProviderModel(tokenizerLookupModel);
+    const tokenizerConfig = parsedTokenizerModel
+      ? context.tokenizerService?.getTokenizerConfigForModel(
+          parsedTokenizerModel.provider,
+          parsedTokenizerModel.model
+        )
+      : undefined;
 
     // Use TokenizerService if available, otherwise fall back to legacy method
     let tokenCount: number;
@@ -287,11 +541,12 @@ export const router = async (req: any, _res: any, context: RouterContext) => {
       // Custom router doesn't provide scenario type, default to 'default'
       req.scenarioType = 'default';
     }
-    req.body.model = model;
+
+    req.body.model = finalizeRouteModel(model, configService, req, { fallbackToDefault: true });
   } catch (error: any) {
     req.log.error(`Error in router middleware: ${error.message}`);
-    const Router = configService.get("Router");
-    req.body.model = Router?.default;
+    const routerConfig = configService.get<RouterConfig>("Router");
+    req.body.model = finalizeRouteModel(routerConfig?.default, configService, req, { fallbackToDefault: false });
     req.scenarioType = 'default';
   }
   return;

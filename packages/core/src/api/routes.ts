@@ -12,6 +12,15 @@ import { ConfigService } from "@/services/config";
 import { ProviderService } from "@/services/provider";
 import { TransformerService } from "@/services/transformer";
 import { Transformer } from "@/types/transformer";
+import { requestStatsService } from "@/services/requestStats";
+import {
+  ensureClaudeCodeAnthropicHeaders,
+  isClaudeCodeMessagesRequest,
+  mergeClaudeCodeRequestQuery,
+} from "@/utils/claude-code";
+
+const CCR_TEST_KEY_INDEX_HEADER = "x-ccr-test-key-index";
+const CCR_TEST_DISABLE_FALLBACK_HEADER = "x-ccr-test-disable-fallback";
 
 // Extend FastifyInstance to include custom services
 declare module "fastify" {
@@ -24,6 +33,127 @@ declare module "fastify" {
   interface FastifyRequest {
     provider?: string;
   }
+}
+
+function getHeaderValue(
+  headers: Record<string, unknown> | undefined,
+  name: string
+): string | undefined {
+  if (!headers) {
+    return undefined;
+  }
+
+  const value = headers[name] ?? headers[name.toLowerCase()];
+  if (Array.isArray(value)) {
+    return typeof value[0] === "string" ? value[0] : undefined;
+  }
+
+  return typeof value === "string" ? value : undefined;
+}
+
+function getTestKeyIndex(headers: Record<string, unknown> | undefined): number | undefined {
+  const rawValue = getHeaderValue(headers, CCR_TEST_KEY_INDEX_HEADER);
+  if (rawValue === undefined || rawValue === "") {
+    return undefined;
+  }
+
+  const keyIndex = Number(rawValue);
+  return Number.isInteger(keyIndex) && keyIndex >= 0 ? keyIndex : undefined;
+}
+
+function shouldDisableFallback(headers: Record<string, unknown> | undefined): boolean {
+  return getHeaderValue(headers, CCR_TEST_DISABLE_FALLBACK_HEADER) === "true";
+}
+
+function removeInternalTestHeaders(headers: Record<string, unknown>): void {
+  for (const key of Object.keys(headers)) {
+    const lowerKey = key.toLowerCase();
+    if (
+      lowerKey === CCR_TEST_KEY_INDEX_HEADER ||
+      lowerKey === CCR_TEST_DISABLE_FALLBACK_HEADER
+    ) {
+      delete headers[key];
+    }
+  }
+}
+
+function cloneHeadersForUpstream(headers: any): any {
+  if (headers instanceof Headers) {
+    const clonedHeaders = new Headers(headers);
+    clonedHeaders.delete("content-length");
+    clonedHeaders.delete(CCR_TEST_KEY_INDEX_HEADER);
+    clonedHeaders.delete(CCR_TEST_DISABLE_FALLBACK_HEADER);
+    return clonedHeaders;
+  }
+
+  const clonedHeaders: Record<string, unknown> = { ...(headers || {}) };
+  for (const key of Object.keys(clonedHeaders)) {
+    if (key.toLowerCase() === "content-length") {
+      delete clonedHeaders[key];
+    }
+  }
+  removeInternalTestHeaders(clonedHeaders);
+  return clonedHeaders;
+}
+
+function decodeHtmlEntities(text: string): string {
+  const namedEntities: Record<string, string> = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    apos: "'",
+    nbsp: " ",
+  };
+
+  return text.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (match, entity) => {
+    if (entity[0] === "#") {
+      const isHex = entity[1]?.toLowerCase() === "x";
+      const value = Number.parseInt(entity.slice(isHex ? 2 : 1), isHex ? 16 : 10);
+      return Number.isFinite(value) && value >= 0 && value <= 0x10ffff
+        ? String.fromCodePoint(value)
+        : match;
+    }
+
+    return namedEntities[entity.toLowerCase()] || match;
+  });
+}
+
+function normalizeWhitespace(text: string): string {
+  return decodeHtmlEntities(text)
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractHtmlTagContent(html: string, tagName: string): string | undefined {
+  const match = html.match(new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i"));
+  const content = match ? normalizeWhitespace(match[1]) : "";
+  return content || undefined;
+}
+
+function summarizeProviderErrorPayload(payload: string): string {
+  const looksLikeHtml =
+    /<!doctype\s+html/i.test(payload) ||
+    /<html\b/i.test(payload) ||
+    /<title\b/i.test(payload) ||
+    /<body\b/i.test(payload);
+
+  if (!looksLikeHtml) {
+    return payload;
+  }
+
+  const title = extractHtmlTagContent(payload, "title");
+  const body = extractHtmlTagContent(payload, "body") || normalizeWhitespace(payload);
+  const bodySummary = body && body !== title ? body.slice(0, 800) : undefined;
+
+  return [
+    "HTML error page",
+    title ? `title: ${title}` : undefined,
+    bodySummary ? `body: ${bodySummary}${body.length > bodySummary.length ? "..." : ""}` : undefined,
+  ].filter(Boolean).join("; ");
 }
 
 /**
@@ -91,11 +221,25 @@ async function handleTransformerEndpoint(
     return formatResponse(finalResponse, reply, body);
   } catch (error: any) {
     // Handle fallback if error occurs
-    if (error.code === 'provider_response_error') {
+    if (
+      error.code === 'provider_response_error' &&
+      !shouldDisableFallback(req.headers as Record<string, unknown>)
+    ) {
       const fallbackResult = await handleFallback(req, reply, fastify, transformer, error);
       if (fallbackResult) {
         return fallbackResult;
       }
+    }
+    // Log unhandled request failure for monitor panel (network errors, etc.)
+    // Note: provider_response_error already logged in sendRequestToProvider
+    if (error.code !== 'provider_response_error') {
+      req.log.info({
+        type: 'request_complete',
+        provider: req.provider || 'unknown',
+        model: body?.model || 'unknown',
+        success: false,
+        error: error.message,
+      }, `Request error: ${error.message}`);
     }
     throw error;
   }
@@ -213,12 +357,7 @@ async function processRequestTransformers(
   bypass = shouldBypassTransformers(provider, transformer, body);
 
   if (bypass) {
-    if (headers instanceof Headers) {
-      headers.delete("content-length");
-    } else {
-      delete headers["content-length"];
-    }
-    config.headers = headers;
+    config.headers = cloneHeadersForUpstream(headers);
   }
 
   // Execute transformer's transformRequestOut method
@@ -293,6 +432,68 @@ function shouldBypassTransformers(
   );
 }
 
+function sanitizeRequestHeaders(
+  headers: Record<string, unknown>
+): Record<string, string> {
+  const disabledHeaderNames = new Set<string>();
+
+  for (const [key, value] of Object.entries(headers)) {
+    if (
+      value === undefined ||
+      value === null ||
+      value === "undefined" ||
+      (key.toLowerCase() === "authorization" &&
+        typeof value === "string" &&
+        value.includes("undefined"))
+    ) {
+      disabledHeaderNames.add(key.toLowerCase());
+    }
+  }
+
+  const result: Record<string, string> = {};
+  const headerKeyByLowerName = new Map<string, string>();
+
+  const setHeader = (key: string, value: string) => {
+    const lowerKey = key.toLowerCase();
+    const existingKey = headerKeyByLowerName.get(lowerKey);
+    if (existingKey) {
+      delete result[existingKey];
+    }
+    headerKeyByLowerName.set(lowerKey, key);
+    result[key] = value;
+  };
+
+  for (const [key, value] of Object.entries(headers)) {
+    const lowerKey = key.toLowerCase();
+    if (
+      lowerKey === CCR_TEST_KEY_INDEX_HEADER ||
+      lowerKey === CCR_TEST_DISABLE_FALLBACK_HEADER
+    ) {
+      continue;
+    }
+
+    if (disabledHeaderNames.has(key.toLowerCase())) {
+      continue;
+    }
+
+    if (Array.isArray(value)) {
+      const joinedValue = value
+        .filter((item) => typeof item === "string" && item)
+        .join(",");
+      if (joinedValue) {
+        setHeader(key, joinedValue);
+      }
+      continue;
+    }
+
+    if (typeof value === "string" && value) {
+      setHeader(key, value);
+    }
+  }
+
+  return result;
+}
+
 /**
  * Send request to LLM provider
  * Handle authentication, build request config, send request and handle errors
@@ -306,11 +507,35 @@ async function sendRequestToProvider(
   transformer: any,
   context: any
 ) {
-  const url = config.url || new URL(provider.baseUrl);
+  let url = config.url || new URL(provider.baseUrl);
+  const shouldApplyClaudeCodeAnthropicCompat =
+    bypass &&
+    transformer?.name === "Anthropic" &&
+    isClaudeCodeMessagesRequest(
+      context?.req?.url,
+      context?.req?.headers as Record<string, unknown>,
+      context?.req?.body as Record<string, any>
+    );
+
+  // Resolve API key with model-aware rotation and health filtering
+  const resolvedKey = fastify.providerService.getApiKey(
+    provider.name,
+    provider.apiKey,
+    requestBody.model,
+    provider.models,
+    getTestKeyIndex(context?.req?.headers as Record<string, unknown>)
+  );
+  const selectedApiKey = resolvedKey.key;
+  const selectedKeyIndex = resolvedKey.keyIndex;
+
+  // Create a resolved provider copy with single apiKey for transformer compatibility
+  // This ensures transformers (anthropic, gemini, cerebras) that access provider.apiKey
+  // always see a plain string, not an array or object
+  const resolvedProvider = { ...provider, apiKey: selectedApiKey };
 
   // Handle authentication in passthrough mode
   if (bypass && typeof transformer.auth === "function") {
-    const auth = await transformer.auth(requestBody, provider);
+    const auth = await transformer.auth(requestBody, resolvedProvider);
     if (auth.body) {
       requestBody = auth.body;
       let headers = config.headers || {};
@@ -332,25 +557,18 @@ async function sendRequestToProvider(
     }
   }
 
-  // Send HTTP request
-  // Prepare headers
-  const requestHeaders: Record<string, string> = {
-    Authorization: `Bearer ${provider.apiKey}`,
-    ...(config?.headers || {}),
-  };
-
-  for (const key in requestHeaders) {
-    if (requestHeaders[key] === "undefined") {
-      delete requestHeaders[key];
-    } else if (
-      ["authorization", "Authorization"].includes(key) &&
-      requestHeaders[key]?.includes("undefined")
-    ) {
-      delete requestHeaders[key];
-    }
+  if (shouldApplyClaudeCodeAnthropicCompat) {
+    url = mergeClaudeCodeRequestQuery(url, context?.req?.url);
+    config.headers = ensureClaudeCodeAnthropicHeaders(config.headers);
   }
 
-  const response = await sendUnifiedRequest(
+  // Send HTTP request - build headers with the resolved API key
+  const requestHeaders = sanitizeRequestHeaders({
+    Authorization: `Bearer ${selectedApiKey}`,
+    ...(config?.headers || {}),
+  });
+
+  let response = await sendUnifiedRequest(
     url,
     requestBody,
     {
@@ -364,18 +582,236 @@ async function sendRequestToProvider(
 
   // Handle request errors
   if (!response.ok) {
+    // Read error text first (body can only be read once)
     const errorText = await response.text();
+
+    // Record failure statistics (both aggregate and per-key)
+    requestStatsService.recordFailure(provider.name, requestBody.model, requestBody, errorText, response.status);
+    requestStatsService.recordKeyFailure(provider.name, selectedKeyIndex, requestBody.model, requestBody, errorText, response.status);
+
+    // Log request completion for monitor panel (failure)
+    context.req.log.info({
+      type: 'request_complete',
+      provider: provider.name,
+      model: requestBody.model,
+      success: false,
+      statusCode: response.status,
+    }, `Request failed: ${provider.name}/${requestBody.model} - ${response.status}`);
+
+    fastify.log.info(`[DEBUG] Error response received, checking transformers for model: ${requestBody.model}`);
+
+    // Helper function to execute logErrorResponse on transformers
+    const executeLogError = async (transformerConfig: any) => {
+      let transformerName: string;
+      let transformerOptions: any = {};
+
+      if (typeof transformerConfig === 'string') {
+        transformerName = transformerConfig;
+      } else {
+        transformerName = transformerConfig.name;
+        transformerOptions = transformerConfig.options || {};
+      }
+
+      const transformerInstance = fastify.transformerService.getTransformer(transformerName);
+
+      if (transformerInstance) {
+        // If it's a constructor (class), we might need to instantiate it, or it might be a static class
+        // But based on TransformerService implementation, most are registered as instances.
+        // However, if it requires options for this specific call, we might face a challenge if it's a singleton.
+        // For 'debug' transformer, it is instantiated with options.
+
+        // Check if we need to/can create a new instance with specific options
+        // If the registered transformer is a class constructor
+        let instance: any = transformerInstance;
+
+        if (typeof transformerInstance === 'function' && /^\s*class\s+/.test(transformerInstance.toString())) {
+             try {
+                instance = new (transformerInstance as any)(transformerOptions);
+                // Inject logger if needed
+                 if (instance && typeof instance === 'object') {
+                    (instance as any).logger = fastify.log;
+                 }
+             } catch (e) {
+                 fastify.log.warn(`Failed to instantiate transformer ${transformerName}: ${e}`);
+                 return;
+             }
+        }
+
+        // If it's the debug transformer and we have specific options for this provider/model configuration,
+        // we might want to ensure we're using those options.
+        // The current DebugTransformer implementation takes options in constructor.
+
+        if (typeof instance.logErrorResponse === "function") {
+          try {
+            fastify.log.info(`[DEBUG] Executing logErrorResponse for ${transformerName}`);
+            await instance.logErrorResponse(response, errorText, context);
+          } catch (transformError) {
+            fastify.log.warn(`Failed to log error response for ${transformerName}: ${transformError}`);
+          }
+        }
+      } else {
+          fastify.log.warn(`Transformer ${transformerName} not found in service`);
+      }
+    };
+
+    // Check provider-level transformers
+    if (provider.transformer?.use?.length) {
+      fastify.log.info(`[DEBUG] Checking ${provider.transformer.use.length} provider-level transformers`);
+      for (const transformerConfig of provider.transformer.use) {
+        await executeLogError(transformerConfig);
+      }
+    }
+
+    // Check model-specific transformers
+    if (provider.transformer?.[requestBody.model]?.use?.length) {
+      fastify.log.info(`[DEBUG] Checking ${provider.transformer[requestBody.model].use.length} model-specific transformers for ${requestBody.model}`);
+      for (const transformerConfig of provider.transformer[requestBody.model].use) {
+         await executeLogError(transformerConfig);
+      }
+    }
+
     fastify.log.error(
       `[provider_response_error] Error from provider(${provider.name},${requestBody.model}: ${response.status}): ${errorText}`,
     );
+    const readableErrorText = summarizeProviderErrorPayload(errorText);
     throw createApiError(
-      `Error from provider(${provider.name},${requestBody.model}: ${response.status}): ${errorText}`,
+      `Error from provider(${provider.name},${requestBody.model}: ${response.status}): ${readableErrorText}`,
       response.status,
       "provider_response_error"
     );
   }
 
+  // Record success statistics
+  try {
+    // Check if this is a streaming response (Content-Type contains text/event-stream or application/x-ndjson)
+    const contentType = response.headers.get('content-type') || response.headers.get('Content-Type');
+    const isStreamResponse = contentType &&
+      (contentType.includes('text/event-stream') ||
+       contentType.includes('application/x-ndjson') ||
+       contentType.includes('application/json-seq'));
+
+    if (isStreamResponse) {
+      // For streaming responses, we can't simply parse the entire response as JSON
+      // Only record basic response info to avoid trying to parse the entire stream
+      requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
+        status: response.status,
+        headers: {
+          'content-type': contentType,
+          'content-length': response.headers.get('content-length') || response.headers.get('Content-Length')
+        },
+        message: "Stream response - data recorded separately",
+        isStream: true
+      });
+    } else {
+      // For non-streaming responses, parse JSON normally
+      const responseData = await response.clone().json();
+      requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, responseData);
+    }
+  } catch (e) {
+    // If JSON parsing fails, try to read as text to preserve raw response
+    try {
+      const rawText = await response.clone().text();
+
+      // Check if this is SSE format
+      const isSSEFormat = rawText.startsWith('data:');
+
+      if (isSSEFormat) {
+        // If it's SSE format, we can try to parse individual data blocks
+        try {
+          const sseEvents = parseSSEEvents(rawText);
+          requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
+            error: "Stream response processed as SSE",
+            sseEvents: sseEvents,
+            eventCount: sseEvents.length,
+            isStream: true
+          });
+        } catch (sseParseError) {
+          // If SSE parsing also fails, record original text
+          requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
+            error: "Failed to parse response as JSON or SSE",
+            rawResponse: rawText.substring(0, 1000) + (rawText.length > 1000 ? '...' : ''), // Limit length
+            parseError: e instanceof Error ? e.message : String(e),
+            sseParseError: sseParseError instanceof Error ? sseParseError.message : String(sseParseError)
+          });
+        }
+      } else {
+        // Regular non-SSE response
+        requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
+          error: "Failed to parse response as JSON",
+          rawResponse: rawText.substring(0, 1000) + (rawText.length > 1000 ? '...' : ''), // Limit length
+          parseError: e instanceof Error ? e.message : String(e)
+        });
+      }
+    } catch (textError) {
+      // If even text reading fails, record minimal error info
+      requestStatsService.recordSuccess(provider.name, requestBody.model, requestBody, {
+        error: "Failed to read response",
+        jsonError: e instanceof Error ? e.message : String(e),
+        textError: textError instanceof Error ? textError.message : String(textError)
+      });
+    }
+  }
+
+  // Record per-key success (single call regardless of response parsing outcome)
+  requestStatsService.recordKeySuccess(provider.name, selectedKeyIndex, requestBody.model, requestBody, {
+    status: response.status,
+    message: "Per-key success recorded"
+  });
+
+  // Log request completion for monitor panel (success)
+  context.req.log.info({
+    type: 'request_complete',
+    provider: provider.name,
+    model: requestBody.model,
+    success: true,
+    statusCode: response.status,
+  }, `Request succeeded: ${provider.name}/${requestBody.model}`);
+
   return response;
+}
+
+/**
+ * Parse SSE (Server-Sent Events) events from raw text
+ * Handles multiple data blocks in the format: data: {...}\n\ndata: {...}\n\n
+ */
+function parseSSEEvents(rawText: string): any[] {
+  const events: any[] = [];
+  const lines = rawText.split('\n');
+  let currentEvent: any = {};
+
+  for (const line of lines) {
+    if (line.trim() === '') {
+      // Empty line indicates end of an event
+      if (Object.keys(currentEvent).length > 0) {
+        events.push({ ...currentEvent });
+        currentEvent = {};
+      }
+    } else if (line.startsWith('data: ')) {
+      const data = line.slice(6).trim();
+      if (data === '[DONE]') {
+        currentEvent.data = { type: 'done' };
+      } else {
+        try {
+          currentEvent.data = JSON.parse(data);
+        } catch (e) {
+          currentEvent.data = { raw: data, error: 'JSON parse failed' };
+        }
+      }
+    } else if (line.startsWith('event: ')) {
+      currentEvent.event = line.slice(7).trim();
+    } else if (line.startsWith('id: ')) {
+      currentEvent.id = line.slice(4).trim();
+    } else if (line.startsWith('retry: ')) {
+      currentEvent.retry = parseInt(line.slice(7).trim());
+    }
+  }
+
+  // Handle the last event (if not ending with empty line)
+  if (Object.keys(currentEvent).length > 0) {
+    events.push(currentEvent);
+  }
+
+  return events;
 }
 
 /**
@@ -529,7 +965,10 @@ export const registerApiRoutes = async (
         );
       }
 
-      if (!apiKey?.trim()) {
+      if (typeof apiKey === 'string' && !apiKey.trim()) {
+        throw createApiError("API key is required", 400, "invalid_request");
+      }
+      if (typeof apiKey !== 'string' && !apiKey) {
         throw createApiError("API key is required", 400, "invalid_request");
       }
 

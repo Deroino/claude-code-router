@@ -9,7 +9,7 @@ import { X, RefreshCw, Download, Trash2, ArrowLeft, File, Layers, Bug } from 'lu
 interface LogViewerProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  showToast?: (message: string, type: 'success' | 'error' | 'warning') => void;
+  showToast?: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => void;
 }
 
 interface LogEntry {
@@ -789,6 +789,27 @@ export function LogViewer({ open, onOpenChange, showToast }: LogViewerProps) {
                 </Button>
               </>
             )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                try {
+                  await api.clearAllLogs();
+                  if (showToast) {
+                    showToast(t('log_viewer.all_logs_cleared') || 'All logs cleared, restarting...', 'success');
+                  }
+                  await api.restartService();
+                } catch (error) {
+                  console.error('Failed to clear logs and restart:', error);
+                  if (showToast) {
+                    showToast(t('log_viewer.clear_all_failed') + ': ' + (error as Error).message, 'error');
+                  }
+                }
+              }}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              {t('log_viewer.clear_all_and_restart') || 'Clear All & Restart'}
+            </Button>
             <Button
               variant="outline"
               size="sm"

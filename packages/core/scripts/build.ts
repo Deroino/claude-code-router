@@ -16,7 +16,7 @@ const baseUrl = path.resolve(__dirname, "..");
 const baseConfig: esbuild.BuildOptions = {
   entryPoints: ["src/server.ts"],
   bundle: true,
-  minify: true,
+  minify: false,
   sourcemap: true,
   platform: "node",
   target: "node18",

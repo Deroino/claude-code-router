@@ -299,7 +299,10 @@ export async function validatePreset(preset: PresetFile): Promise<{
       if (!provider.api_base_url) {
         errors.push(`Provider "${provider.name}" missing api_base_url`);
       }
-      if (!provider.models || provider.models.length === 0) {
+      const derivedModels = Array.isArray(provider.api_key)
+        ? provider.api_key.flatMap((entry: any) => typeof entry === 'object' && entry?.models ? entry.models : [])
+        : [];
+      if (derivedModels.length === 0) {
         warnings.push(`Provider "${provider.name}" has no models`);
       }
     }

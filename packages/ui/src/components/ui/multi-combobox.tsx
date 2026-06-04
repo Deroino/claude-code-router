@@ -38,6 +38,22 @@ export function MultiCombobox({
   emptyPlaceholder = "No options found.",
 }: MultiComboboxProps) {
   const [open, setOpen] = React.useState(false)
+  const [search, setSearch] = React.useState("")
+  const listRef = React.useRef<React.ElementRef<typeof CommandList>>(null)
+
+  React.useEffect(() => {
+    if (!open) return;
+    requestAnimationFrame(() => {
+      listRef.current?.scrollTo({ top: 0 });
+    });
+  }, [open, search]);
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) {
+      setSearch("");
+    }
+  };
   
   const handleSelect = (currentValue: string) => {
     if (value.includes(currentValue)) {
@@ -70,7 +86,7 @@ export function MultiCombobox({
           )
         })}
       </div>
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={handleOpenChange}>
         <PopoverTrigger asChild>
           <Button
             variant="outline"
@@ -84,8 +100,12 @@ export function MultiCombobox({
         </PopoverTrigger>
         <PopoverContent className="w-[--radix-popover-trigger-width] p-0 animate-fade-in">
           <Command>
-            <CommandInput placeholder={searchPlaceholder} />
-            <CommandList>
+            <CommandInput
+              placeholder={searchPlaceholder}
+              value={search}
+              onValueChange={setSearch}
+            />
+            <CommandList ref={listRef}>
               <CommandEmpty>{emptyPlaceholder}</CommandEmpty>
               <CommandGroup>
                 {options.map((option) => (

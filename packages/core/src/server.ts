@@ -31,7 +31,8 @@ import { registerApiRoutes } from "./api/routes";
 import { ProviderService } from "./services/provider";
 import { TransformerService } from "./services/transformer";
 import { TokenizerService } from "./services/tokenizer";
-import { router, calculateTokenCount, searchProjectBySession } from "./utils/router";
+import { requestStatsService } from "./services/requestStats";
+import { router, calculateTokenCount, searchProjectBySession, resetModelGroupRotationState } from "./utils/router";
 import { sessionUsageCache } from "./utils/cache";
 
 // Extend FastifyRequest to include custom properties
@@ -72,6 +73,7 @@ class Server {
   providerService!: ProviderService;
   transformerService: TransformerService;
   tokenizerService: TokenizerService;
+  private initializationPromise: Promise<void>;
 
   constructor(options: ServerOptions = {}) {
     const { initialConfig, ...fastifyOptions } = options;
@@ -88,13 +90,41 @@ class Server {
       this.configService,
       this.app.log
     );
-    this.transformerService.initialize().finally(() => {
+    // Save initialization promise to wait for it in start()
+    this.initializationPromise = this.transformerService.initialize().then(() => {
       this.providerService = new ProviderService(
         this.configService,
         this.transformerService,
         this.app.log
       );
+      // Wire up stats service for health-aware API key selection
+      this.providerService.setStatsService(requestStatsService);
+    }).catch((error) => {
+      this.app.log.error(`Failed to initialize ProviderService: ${error}`);
+      throw error;
     });
+
+    // Hot-reload coordination: wait for init, then listen for config changes
+    this.initializationPromise.then(() => {
+      let reloadTimer: NodeJS.Timeout | null = null;
+
+      this.configService.onConfigChange(async () => {
+        // Debounce: fs.watch may fire multiple times for one save
+        if (reloadTimer) clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(async () => {
+          try {
+            this.app.log.info('Config changed, reloading services...');
+            resetModelGroupRotationState();
+            await this.transformerService.reloadCustomTransformers();
+            this.providerService.reload();
+            this.app.log.info('All services reloaded successfully');
+          } catch (error) {
+            this.app.log.error(`Service hot-reload error: ${error}`);
+          }
+        }, 300);
+      });
+    });
+
     // Initialize tokenizer service
     this.tokenizerService.initialize().catch((error) => {
       this.app.log.error(`Failed to initialize TokenizerService: ${error}`);
@@ -144,10 +174,18 @@ class Server {
         fastify.addHook('preHandler', async (req: any, reply: any) => {
           const url = new URL(`http://127.0.0.1${req.url}`);
           if (url.pathname.endsWith("/v1/messages")) {
+            const originalModel = req.body?.model;
             await router(req, reply, {
               configService: this.configService,
               tokenizerService: this.tokenizerService,
             });
+            // Log routing decision (always log, even if model didn't change)
+            req.log.info({
+              type: 'routing',
+              originalModel: originalModel,
+              targetModel: req.body?.model,
+              scenarioType: req.scenarioType
+            }, `Routing: ${originalModel} -> ${req.body?.model}`);
           }
         });
         await registerApiRoutes(fastify);
@@ -171,6 +209,8 @@ class Server {
       transformerService,
       this.app.log
     );
+    // Wire up stats service for health-aware API key selection
+    providerService.setStatsService(requestStatsService);
     const tokenizerService = new TokenizerService(
       configService,
       this.app.log
@@ -185,10 +225,18 @@ class Server {
       fastify.addHook('preHandler', async (req: any, reply: any) => {
         const url = new URL(`http://127.0.0.1${req.url}`);
         if (url.pathname.endsWith("/v1/messages")) {
+          const originalModel = req.body?.model;
           await router(req, reply, {
             configService,
             tokenizerService,
           });
+          // Log routing decision (always log, even if model didn't change)
+          req.log.info({
+            type: 'routing',
+            originalModel: originalModel,
+            targetModel: req.body?.model,
+            scenarioType: req.scenarioType
+          }, `Routing: ${originalModel} -> ${req.body?.model}`);
         }
       });
       await registerApiRoutes(fastify);
@@ -197,6 +245,9 @@ class Server {
 
   async start(): Promise<void> {
     try {
+      // Wait for providerService initialization to complete
+      await this.initializationPromise;
+
       this.app._server = this;
 
       this.app.addHook("preHandler", (req, reply, done) => {
@@ -267,10 +318,13 @@ export { sessionUsageCache };
 export { router };
 export { calculateTokenCount };
 export { searchProjectBySession };
-export type { RouterScenarioType, RouterFallbackConfig } from "./utils/router";
+export type { RouterScenarioType, RouterFallbackConfig } from "./types/llm";
 export { ConfigService } from "./services/config";
 export { ProviderService } from "./services/provider";
 export { TransformerService } from "./services/transformer";
 export { TokenizerService } from "./services/tokenizer";
 export { pluginManager, tokenSpeedPlugin, getTokenSpeedStats, getGlobalTokenSpeedStats, CCRPlugin, CCRPluginOptions, PluginMetadata } from "./plugins";
 export { SSEParserTransform, SSESerializerTransform, rewriteStream } from "./utils/sse";
+export { requestStatsService } from "./services/requestStats";
+export { parseStatsKey } from "./services/requestStats";
+export type { RequestStats } from "./services/requestStats";

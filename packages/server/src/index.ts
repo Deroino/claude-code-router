@@ -5,9 +5,10 @@ import { join } from "path";
 import { initConfig, initDir } from "./utils";
 import { createServer } from "./server";
 import { apiKeyAuth } from "./middleware/auth";
-import { CONFIG_FILE, HOME_DIR, listPresets } from "@CCR/shared";
+import { CONFIG_FILE, HOME_DIR, listPresets, STATS_FILE } from "@CCR/shared";
 import { createStream } from 'rotating-file-stream';
-import { sessionUsageCache } from "@musistudio/llms";
+// @ts-ignore - requestStatsService is exported but not in type definitions
+import { sessionUsageCache, requestStatsService } from "@musistudio/llms";
 import { SSEParserTransform } from "./utils/SSEParser.transform";
 import { SSESerializerTransform } from "./utils/SSESerializer.transform";
 import { rewriteStream } from "./utils/rewriteStream";
@@ -16,6 +17,7 @@ import { IAgent, ITool } from "./agents/type";
 import agentsManager from "./agents";
 import { EventEmitter } from "node:events";
 import { pluginManager, tokenSpeedPlugin } from "@musistudio/llms";
+import { ConfigService } from "@musistudio/llms";
 
 const event = new EventEmitter()
 
@@ -169,10 +171,12 @@ async function getServer(options: RunOptions = {}) {
   const serverInstance = await createServer({
     jsonPath: CONFIG_FILE,
     initialConfig: {
-      // ...config,
-      providers: config.Providers || config.providers,
+      // Preserve critical config that should persist during reload
+      noAuth: config.noAuth,
+      APIKEY: config.APIKEY,
       HOST: HOST,
       PORT: servicePort,
+      providers: config.Providers || config.providers,
       LOG_FILE: join(
         homedir(),
         ".claude-code-router",
@@ -189,6 +193,9 @@ async function getServer(options: RunOptions = {}) {
   // Register and configure plugins from config
   await registerPluginsFromConfig(serverInstance, config);
 
+  // Get ConfigService instance from server for hot-reload support
+  const configService = (serverInstance as any).configService as ConfigService;
+
   // Add async preHandler hook for authentication
   serverInstance.addHook("preHandler", async (req: any, reply: any) => {
     return new Promise<void>((resolve, reject) => {
@@ -196,8 +203,8 @@ async function getServer(options: RunOptions = {}) {
         if (err) reject(err);
         else resolve();
       };
-      // Call the async auth function
-      apiKeyAuth(config)(req, reply, done).catch(reject);
+      // Call the async auth function with ConfigService (supports hot-reload)
+      apiKeyAuth(configService)(req, reply, done).catch(reject);
     });
   });
   serverInstance.addHook("preHandler", async (req: any, reply: any) => {
@@ -211,14 +218,16 @@ async function getServer(options: RunOptions = {}) {
   serverInstance.addHook("preHandler", async (req: any, reply: any) => {
     if (req.pathname.endsWith("/v1/messages")) {
       const useAgents = []
+      // Get latest config from ConfigService (supports hot-reload)
+      const currentConfig = configService.getAll();
 
       for (const agent of agentsManager.getAllAgents()) {
-        if (agent.shouldHandle(req, config)) {
+        if (agent.shouldHandle(req, currentConfig)) {
           // Set agent identifier
           useAgents.push(agent.name)
 
           // change request body
-          agent.reqHandler(req, config);
+          agent.reqHandler(req, currentConfig);
 
           // append agent tools
           if (agent.tools.size) {
@@ -440,11 +449,39 @@ async function run() {
   const server = await getServer();
   server.app.post("/api/restart", async () => {
     setTimeout(async () => {
+      try {
+        // Ensure stats are persisted before exit
+        requestStatsService.shutdown();
+      } catch (e) {
+        console.error('Failed to save stats before restart:', e);
+      }
       process.exit(0);
     }, 100);
 
     return { success: true, message: "Service restart initiated" }
   });
+
+  // Initialize request stats persistence
+  try {
+    // requestStatsService is imported at the top level
+    requestStatsService.initPersistence(STATS_FILE);
+
+    // Add shutdown hooks for graceful persistence
+    const shutdownHandler = () => {
+      requestStatsService.shutdown();
+    };
+    process.on('SIGTERM', shutdownHandler);
+    process.on('SIGINT', shutdownHandler);
+    process.on('beforeExit', shutdownHandler);
+    // Safety net: exit handler runs synchronous code only
+    // requestStatsService.saveToFile() uses writeFileSync, so this is safe
+    process.on('exit', () => {
+      try { requestStatsService.shutdown(); } catch (e) { /* ignore */ }
+    });
+  } catch (error) {
+    console.error('Failed to initialize request stats persistence:', error);
+  }
+
   await server.start();
 }
 
@@ -453,6 +490,8 @@ export type { RunOptions };
 export type { IAgent, ITool } from "./agents/type";
 export { initDir, initConfig, readConfigFile, writeConfigFile, backupConfigFile } from "./utils";
 export { pluginManager, tokenSpeedPlugin } from "@musistudio/llms";
+// @ts-ignore - Re-export requestStatsService from llms package
+export { requestStatsService } from "@musistudio/llms";
 
 // Start service if this file is run directly
 if (require.main === module) {

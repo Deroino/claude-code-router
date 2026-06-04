@@ -155,7 +155,7 @@ export class TokenizerService {
     providerName: string,
     modelName: string
   ): TokenizerConfig | undefined {
-    const providers = this.configService.get<any[]>("providers") || [];
+    const providers = this.configService.get<any[]>("providers") || this.configService.get<any[]>("Providers") || [];
     const provider = providers.find((p) => p.name === providerName);
 
     if (!provider?.tokenizer) {

@@ -1,11 +1,13 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useConfig } from "./ConfigProvider";
 import { ProviderList } from "./ProviderList";
+import type { RequestStatsItem } from "@/hooks/useRequestStats";
 import {
   Dialog,
   DialogContent,
@@ -14,18 +16,45 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { X, Trash2, Plus, Eye, EyeOff, Search, XCircle } from "lucide-react";
+import { X, Trash2, Plus, Eye, EyeOff, Search, XCircle, Play, Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Combobox } from "@/components/ui/combobox";
-import { ComboInput } from "@/components/ui/combo-input";
 import { api } from "@/lib/api";
-import type { Provider } from "@/types";
+import { getRequestStatus, getStatusBadgeClasses } from "@/lib/requestStatus";
+import { getProviderModelUnion, getProviderModelUnionFromApiKey } from "@/lib/providerModels";
+import type { Provider, ApiKeyEntry, ApiKeyConfig } from "@/types";
+import { NewApiAssignmentDialog } from "./NewApiAssignmentDialog";
+import { buildBatchTestsForProvider, buildBatchTestsForProviders, type BatchTestTarget } from "@/lib/batchTests";
+
+// Model data from /v1/models endpoint
+interface ModelData {
+  id: string;
+  object: string;
+  created: number;
+  owned_by: string;
+}
 
 interface ProviderType extends Provider {}
 
-export function Providers() {
+export function Providers({
+  showToast,
+  removeToast,
+  requestStats,
+  hoveredModel,
+  onBadgeRef,
+  onOpenBatchTest,
+  onProviderResultsCleared,
+}: {
+  showToast: (message: string, type: 'success' | 'error' | 'warning', duration?: number) => string;
+  removeToast: (id: string) => void;
+  requestStats?: RequestStatsItem[];
+  hoveredModel?: { provider: string | null; model: string | null } | null | undefined;
+  onBadgeRef?: (provider: string, model: string, ref: HTMLDivElement | null) => void;
+  onOpenBatchTest: (tests: BatchTestTarget[], title?: string) => Promise<void> | void;
+  onProviderResultsCleared?: (provider: string) => void;
+}) {
   const { t } = useTranslation();
-  const { config, setConfig } = useConfig();
+  const { config, setConfig, flushSave } = useConfig();
   const [editingProviderIndex, setEditingProviderIndex] = useState<number | null>(null);
   const [deletingProviderIndex, setDeletingProviderIndex] = useState<number | null>(null);
   const [hasFetchedModels, setHasFetchedModels] = useState<Record<number, boolean>>({});
@@ -35,11 +64,25 @@ export function Providers() {
   const [editingProviderData, setEditingProviderData] = useState<ProviderType | null>(null);
   const [isNewProvider, setIsNewProvider] = useState<boolean>(false);
   const [providerTemplates, setProviderTemplates] = useState<ProviderType[]>([]);
-  const [showApiKey, setShowApiKey] = useState<Record<number, boolean>>({});
+  const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({});
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>("");
-  const comboInputRef = useRef<HTMLInputElement>(null);
+  const [keyModelInputs, setKeyModelInputs] = useState<Record<string, string>>({});
+  const [modelTransformerSearch, setModelTransformerSearch] = useState<string>("");
+
+  // Model fetching state
+  const [isFetchingModels, setIsFetchingModels] = useState<boolean>(false);
+  const [fetchedModels, setFetchedModels] = useState<ModelData[]>([]);
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
+  const [showModelSelectDialog, setShowModelSelectDialog] = useState<boolean>(false);
+  const [modelFetchError, setModelFetchError] = useState<string | null>(null);
+  const [modelSearchTerm, setModelSearchTerm] = useState<string>("");
+  const [targetKeyIndex, setTargetKeyIndex] = useState<number>(0); // Which key to add models to
+
+  // NewAPI assignment state
+  const [showNewApiAssignment, setShowNewApiAssignment] = useState<boolean>(false);
+  const [newApiPricingData, setNewApiPricingData] = useState<any>(null);
 
   useEffect(() => {
     const fetchProviderTemplates = async () => {
@@ -81,7 +124,7 @@ export function Providers() {
           <CardTitle className="text-lg">{t("providers.title")}</CardTitle>
         </CardHeader>
         <CardContent className="flex-grow flex items-center justify-center p-4">
-          <div className="text-gray-500">Loading providers configuration...</div>
+          <div className="text-gray-500">{t("providers.loading_configuration")}</div>
         </CardContent>
       </Card>
     );
@@ -92,7 +135,7 @@ export function Providers() {
 
 
   const handleAddProvider = () => {
-    const newProvider: ProviderType = { name: "", api_base_url: "", api_key: "", models: [] };
+    const newProvider: ProviderType = { name: "", api_base_url: "", api_key: "" };
     setEditingProviderIndex(config.Providers.length);
     setEditingProviderData(newProvider);
     setIsNewProvider(true);
@@ -103,11 +146,21 @@ export function Providers() {
     }));
     setApiKeyError(null);
     setNameError(null);
+    setKeyModelInputs({});
+    setModelTransformerSearch("");
   };
 
   const handleEditProvider = (index: number) => {
     // Find the actual index in the original providers array
-    const actualIndex = validProviders.indexOf(filteredProviders[index]);
+    // Since providers are sorted in UI but not in config, we need to map the sorted provider back to original
+    const sortedProvider = sortedProviders[index];
+    const actualIndex = validProviders.indexOf(sortedProvider);
+
+    if (actualIndex === -1) {
+      console.error("Could not find provider in original list", sortedProvider);
+      return;
+    }
+
     const provider = config.Providers[actualIndex];
     setEditingProviderIndex(actualIndex);
     setEditingProviderData(JSON.parse(JSON.stringify(provider))); // 深拷贝
@@ -119,9 +172,11 @@ export function Providers() {
     }));
     setApiKeyError(null);
     setNameError(null);
+    setKeyModelInputs({});
+    setModelTransformerSearch("");
   };
 
-  const handleSaveProvider = () => {
+  const handleSaveProvider = async () => {
     if (!editingProviderData) return;
     
     // Validate name
@@ -145,8 +200,16 @@ export function Providers() {
       return;
     }
     
-    // Validate API key
-    if (!editingProviderData.api_key || editingProviderData.api_key.trim() === '') {
+    // Validate API key - support single string, array of strings, or mixed with ApiKeyEntry
+    const apiKeys = Array.isArray(editingProviderData.api_key)
+      ? editingProviderData.api_key
+      : [editingProviderData.api_key];
+
+    if (!apiKeys.some(k => {
+      if (typeof k === 'string') return k && k.trim() !== '';
+      if (k && typeof k === 'object') return k.key && k.key.trim() !== '';
+      return false;
+    })) {
       setApiKeyError(t("providers.api_key_required"));
       return;
     }
@@ -162,7 +225,10 @@ export function Providers() {
       } else {
         newProviders[editingProviderIndex] = editingProviderData;
       }
-      setConfig({ ...config, Providers: newProviders });
+      const newConfig = { ...config, Providers: newProviders };
+      setConfig(newConfig);
+      // Immediately flush to server so models are available for testing
+      await flushSave(newConfig);
     }
     // Reset API key visibility for this provider
     if (editingProviderIndex !== null) {
@@ -175,6 +241,8 @@ export function Providers() {
     setEditingProviderIndex(null);
     setEditingProviderData(null);
     setIsNewProvider(false);
+    setKeyModelInputs({});
+    setModelTransformerSearch("");
   };
 
   const handleCancelAddProvider = () => {
@@ -197,6 +265,8 @@ export function Providers() {
     setIsNewProvider(false);
     setApiKeyError(null);
     setNameError(null);
+    setKeyModelInputs({});
+    setModelTransformerSearch("");
   };
 
   // Handle deletion by setting the correct index in the state
@@ -205,16 +275,36 @@ export function Providers() {
   };
 
   // Handle deletion by passing the filtered index to get the actual index in the original array
-  const handleRemoveProvider = (filteredIndex: number) => {
+  const handleRemoveProvider = async (filteredIndex: number) => {
     // Find the actual index in the original providers array
-    const actualIndex = validProviders.indexOf(filteredProviders[filteredIndex]);
+    // Since providers are sorted in UI but not in config, we need to map the sorted provider back to original
+    const sortedProvider = sortedProviders[filteredIndex];
+    const actualIndex = validProviders.indexOf(sortedProvider);
+
+    if (actualIndex === -1) {
+      console.error("Could not find provider in original list", sortedProvider);
+      return;
+    }
+
+    const providerName = sortedProvider?.name;
     const newProviders = [...config.Providers];
     newProviders.splice(actualIndex, 1);
     setConfig({ ...config, Providers: newProviders });
     setDeletingProviderIndex(null);
+
+    if (providerName) {
+      onProviderResultsCleared?.(providerName);
+      const cleanupResults = await Promise.allSettled([
+        api.clearProviderBatchTestResults(providerName),
+        api.clearProviderRequestStats(providerName),
+      ]);
+      if (cleanupResults.some(result => result.status === "rejected")) {
+        showToast(t("providers.provider_removed_cleanup_failed"), "warning", 5000);
+      }
+    }
   };
 
-  const handleProviderChange = (_index: number, field: string, value: string) => {
+  const handleProviderChange = (_index: number, field: string, value: string | string[] | (string | ApiKeyEntry)[]) => {
     if (editingProviderData) {
       const updatedProvider = { ...editingProviderData, [field]: value };
       setEditingProviderData(updatedProvider);
@@ -445,22 +535,6 @@ export function Providers() {
     }
   };
 
-  const handleAddModel = (_index: number, model: string) => {
-    if (!model.trim() || !editingProviderData) return;
-    
-    const updatedProvider = { ...editingProviderData };
-    
-    // Handle case where provider.models might be null or undefined
-    const models = Array.isArray(updatedProvider.models) ? [...updatedProvider.models] : [];
-    
-    // Check if model already exists
-    if (!models.includes(model.trim())) {
-      models.push(model.trim());
-      updatedProvider.models = models;
-      setEditingProviderData(updatedProvider);
-    }
-  };
-
     const handleTemplateImport = (value: string) => {
     if (!value) return;
     try {
@@ -480,23 +554,323 @@ export function Providers() {
     }
   };
 
-  const handleRemoveModel = (_providerIndex: number, modelIndex: number) => {
+  const handleKeyAddModel = (keyIndex: number, model: string) => {
+    if (!model.trim()) return;
+
+    setEditingProviderData(prev => {
+      if (!prev) return prev;
+
+      const rawKeys = Array.isArray(prev.api_key) ? [...prev.api_key] : [prev.api_key];
+      const entry = rawKeys[keyIndex];
+
+      const keyStr = typeof entry === 'string' ? entry : entry.key;
+      const newModels = typeof entry === 'string' ? [] : [...(entry.models || [])];
+
+      // Add if not exists
+      if (!newModels.includes(model.trim())) {
+        newModels.push(model.trim());
+        showToast(
+          t("providers.model_added_to_key", { index: keyIndex + 1, model: model.trim() }),
+          "success",
+          2000
+        );
+      }
+
+      rawKeys[keyIndex] = typeof entry === 'string'
+        ? { key: keyStr, models: newModels }
+        : { ...entry, key: keyStr, models: newModels };
+      return { ...prev, api_key: rawKeys };
+    });
+  };
+
+  const handleKeyRemoveModel = (keyIndex: number, modelIndex: number) => {
+    setEditingProviderData(prev => {
+      if (!prev) return prev;
+
+      const rawKeys = Array.isArray(prev.api_key) ? [...prev.api_key] : [prev.api_key];
+      const entry = rawKeys[keyIndex];
+
+      if (typeof entry === 'string') return prev; // Should not happen if UI logic is correct
+
+      const currentModels = [...(entry.models || [])];
+
+      if (modelIndex >= 0 && modelIndex < currentModels.length) {
+        currentModels.splice(modelIndex, 1);
+        rawKeys[keyIndex] = { ...entry, models: currentModels };
+        return { ...prev, api_key: rawKeys };
+      }
+      return prev;
+    });
+  };
+
+  const computeAllKeyModelsUnion = (apiKey: ApiKeyConfig): string[] => {
+    return getProviderModelUnionFromApiKey(apiKey);
+  };
+
+  // Remove a model from the provider (removes from ALL keys)
+  const handleProviderModelRemove = (modelIndex: number) => {
+    setEditingProviderData(prev => {
+      if (!prev) return prev;
+
+      const allKeyModels = computeAllKeyModelsUnion(prev.api_key);
+      const modelToRemove = allKeyModels[modelIndex];
+
+      if (!modelToRemove) return prev;
+
+      // Remove this model from all keys
+      const rawKeys = Array.isArray(prev.api_key) ? [...prev.api_key] : [prev.api_key];
+
+      rawKeys.forEach((entry, idx) => {
+        if (typeof entry !== 'string' && entry.models) {
+          const filtered = entry.models.filter(m => m !== modelToRemove);
+          rawKeys[idx] = { ...entry, models: filtered };
+        }
+      });
+
+      return { ...prev, api_key: rawKeys };
+    });
+  };
+
+  // Fetch models from provider's /v1/models endpoint
+  // Uses server-side proxy to avoid CORS issues
+  // First detects if provider is NewAPI (via /api/pricing), then handles accordingly
+  const handleFetchModels = async () => {
     if (!editingProviderData) return;
-    
-    const updatedProvider = { ...editingProviderData };
-    
-    // Handle case where provider.models might be null or undefined
-    const models = Array.isArray(updatedProvider.models) ? [...updatedProvider.models] : [];
-    
-    // Handle case where modelIndex might be out of bounds
-    if (modelIndex >= 0 && modelIndex < models.length) {
-      models.splice(modelIndex, 1);
-      updatedProvider.models = models;
-      setEditingProviderData(updatedProvider);
+
+    const { api_base_url, api_key } = editingProviderData;
+
+    // Validate required fields (api_key is optional — some free/public endpoints don't require auth)
+    if (!api_base_url) {
+      showToast(t("providers.api_base_url_required"), "error");
+      return;
+    }
+
+    setIsFetchingModels(true);
+    setModelFetchError(null);
+    setFetchedModels([]);
+    setSelectedModels(new Set());
+
+    try {
+      // Get API key string (handle array, string, or object)
+      let apiKeyStr = '';
+      if (typeof api_key === 'string') {
+        apiKeyStr = api_key;
+      } else if (Array.isArray(api_key) && api_key.length > 0) {
+        const firstKey = api_key[0];
+        apiKeyStr = typeof firstKey === 'string' ? firstKey : (firstKey?.key || '');
+      }
+
+      // Use server-side proxy to avoid CORS
+      const result = await api.fetchModels(api_base_url, apiKeyStr);
+
+      if (!result.success) {
+        throw new Error(result.error || t("providers.fetch_models_failed"));
+      }
+
+      // Handle NewAPI detection result
+      if (result.type === 'newapi' && result.data) {
+        setNewApiPricingData(result.data);
+        setShowNewApiAssignment(true);
+        setIsFetchingModels(false);
+        return;
+      }
+
+      // Handle standard /v1/models result
+      if (result.type === 'models' && result.data) {
+        const data = result.data;
+
+        // Parse response - accept any payload that contains data array
+        // (OpenAI spec uses object === 'list', but many compatible endpoints omit it)
+        if (Array.isArray(data.data)) {
+          const models: ModelData[] = data.data;
+          setFetchedModels(models);
+
+          if (editingProviderIndex !== null) {
+            setHasFetchedModels(prev => ({
+              ...prev,
+              [editingProviderIndex]: true
+            }));
+          }
+
+          const existingModels = getProviderModelUnion(editingProviderData);
+          const preSelected = new Set<string>();
+          models.forEach(m => {
+            if (existingModels.includes(m.id)) {
+              preSelected.add(m.id);
+            }
+          });
+          setSelectedModels(preSelected);
+
+          setTargetKeyIndex(0); // Initialize to first key
+          setShowModelSelectDialog(true);
+        } else {
+          throw new Error(t("providers.invalid_models_response"));
+        }
+      }
+    } catch (error: any) {
+      const errorMsg = error.message || t("providers.fetch_models_failed");
+      setModelFetchError(errorMsg);
+      showToast(t("providers.fetch_models_failed_with_error", { error: errorMsg }), "error");
+    } finally {
+      setIsFetchingModels(false);
     }
   };
 
+  // Handle NewAPI assignment confirmation
+  const handleNewApiAssignmentConfirm = async (result: { updatedKeys: (string | ApiKeyEntry)[]; allModels: string[] }) => {
+    console.log("[Providers] NewAPI assignment confirm:", {
+      allModels: result.allModels,
+      updatedKeys: result.updatedKeys,
+      allModelsCount: result.allModels.length,
+    });
+
+    // Directly save to config — cannot rely on editingProviderData
+    // because closing the inner Dialog triggers the outer Dialog's onOpenChange,
+    // which calls handleCancelAddProvider and resets editingProviderData to null.
+    if (editingProviderIndex !== null && editingProviderData) {
+      const updatedProvider = { ...editingProviderData, api_key: result.updatedKeys };
+
+      console.log("[Providers] Direct save:", {
+        newKeys: result.updatedKeys.length,
+        discoveredModels: result.allModels.length,
+      });
+
+      const newProviders = [...config.Providers];
+      if (isNewProvider) {
+        newProviders.push(updatedProvider);
+      } else {
+        newProviders[editingProviderIndex] = updatedProvider;
+      }
+      const newConfig = { ...config, Providers: newProviders };
+      setConfig(newConfig);
+      await flushSave(newConfig);
+
+      showToast(t("newapi_assignment.save_success", { count: result.allModels.length }), "success");
+    }
+
+    // Close assignment dialog
+    setShowNewApiAssignment(false);
+    setNewApiPricingData(null);
+
+    // Close edit dialog (it would close anyway due to Radix nested dialog behavior)
+    setEditingProviderIndex(null);
+    setEditingProviderData(null);
+    setIsNewProvider(false);
+  };
+
+  // Handle model selection
+  const handleModelToggle = (modelId: string) => {
+    setSelectedModels(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(modelId)) {
+        newSet.delete(modelId);
+      } else {
+        newSet.add(modelId);
+      }
+      return newSet;
+    });
+  };
+
+  // Handle select all models
+  const handleSelectAll = () => {
+    if (selectedModels.size === fetchedModels.length) {
+      // Deselect all
+      setSelectedModels(new Set());
+    } else {
+      // Select all
+      setSelectedModels(new Set(fetchedModels.map(m => m.id)));
+    }
+  };
+
+  // Confirm model selection and add to provider
+  const handleConfirmModelSelection = () => {
+    if (selectedModels.size === 0) return;
+
+    setEditingProviderData(prev => {
+      if (!prev) return prev;
+
+      const rawKeys = Array.isArray(prev.api_key) ? [...prev.api_key] : [prev.api_key];
+      const modelsToAdd = Array.from(selectedModels);
+
+      // Get the target key
+      const targetKey = rawKeys[targetKeyIndex];
+
+      if (typeof targetKey === 'string') {
+        // Convert string to ApiKeyEntry with models
+        rawKeys[targetKeyIndex] = { key: targetKey, models: modelsToAdd };
+      } else if (targetKey && typeof targetKey === 'object') {
+        // Add models to existing entry
+        const existingModels = targetKey.models || [];
+        const newModels = modelsToAdd.filter(m => !existingModels.includes(m));
+        rawKeys[targetKeyIndex] = { ...targetKey, models: [...existingModels, ...newModels] };
+      }
+
+      return { ...prev, api_key: rawKeys };
+    });
+
+    const actualModelsAdded = selectedModels.size;
+    setShowModelSelectDialog(false);
+    setFetchedModels([]);
+    setSelectedModels(new Set());
+    showToast(
+      t("model_selector.added_to_key", { count: actualModelsAdded, index: targetKeyIndex + 1 }),
+      "success"
+    );
+  };
+
+  // Cancel model selection
+  const handleCancelModelSelection = () => {
+    setShowModelSelectDialog(false);
+    setFetchedModels([]);
+    setSelectedModels(new Set());
+    setModelFetchError(null);
+    setModelSearchTerm("");
+    setTargetKeyIndex(0); // Reset to first key
+  };
+
+  // Filter models based on search term
+  const filteredModels = fetchedModels.filter(model => {
+    if (!modelSearchTerm) return true;
+    const term = modelSearchTerm.toLowerCase();
+    return model.id.toLowerCase().includes(term) ||
+           (model.owned_by && model.owned_by.toLowerCase().includes(term));
+  });
+
   const editingProvider = editingProviderData || (editingProviderIndex !== null ? validProviders[editingProviderIndex] : null);
+  const editingProviderModels = editingProvider ? getProviderModelUnion(editingProvider) : [];
+  const filteredModelTransformerModels = modelTransformerSearch.trim()
+    ? editingProviderModels.filter(model =>
+        model.toLowerCase().includes(modelTransformerSearch.trim().toLowerCase())
+      )
+    : editingProviderModels;
+
+  const openBatchTestForTargets = (tests: BatchTestTarget[], title?: string) => {
+    if (tests.length === 0) {
+      showToast(t("batch_test.no_models_to_test"), "warning");
+      return;
+    }
+    void onOpenBatchTest(tests, title);
+  };
+
+  const handleBatchTestAll = () => {
+    openBatchTestForTargets(buildBatchTestsForProviders(validProviders), t("batch_test.title"));
+  };
+
+  const handleBatchTestProvider = (provider: Provider) => {
+    openBatchTestForTargets(
+      buildBatchTestsForProvider(provider),
+      t("providers.provider_batch_test_title", { provider: provider.name || t("providers.unnamed_provider") })
+    );
+  };
+
+  const handleClearRequestStats = async () => {
+    try {
+      await api.clearRequestStats();
+      showToast(t("providers.clear_request_stats_success"), "success");
+    } catch (err: any) {
+      showToast(err?.message || t("providers.clear_request_stats_failed"), "error", 5000);
+    }
+  };
 
   // Filter providers based on search term
   const filteredProviders = validProviders.filter(provider => {
@@ -509,13 +883,36 @@ export function Providers() {
     ) {
       return true;
     }
-    // Check models
-    if (provider.models && Array.isArray(provider.models)) {
-      return provider.models.some(model => 
-        model && model.toLowerCase().includes(term)
-      );
-    }
-    return false;
+    const providerModels = getProviderModelUnion(provider);
+    return providerModels.some(model =>
+      model && model.toLowerCase().includes(term)
+    );
+  });
+
+  // Sort providers:
+  // 1. Providers with no models go to the bottom.
+  // 2. Otherwise sort by the number of models whose last request status is
+  //    "success" (green badge), in descending order.
+  const sortedProviders = [...filteredProviders].sort((a, b) => {
+    const aModels = getProviderModelUnion(a);
+    const bModels = getProviderModelUnion(b);
+
+    const aEmpty = aModels.length === 0;
+    const bEmpty = bModels.length === 0;
+    if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+
+    const aLastSuccess = aModels.reduce(
+      (sum, model) =>
+        sum + (getRequestStatus(requestStats, a.name, model) === "success" ? 1 : 0),
+      0
+    );
+    const bLastSuccess = bModels.reduce(
+      (sum, model) =>
+        sum + (getRequestStatus(requestStats, b.name, model) === "success" ? 1 : 0),
+      0
+    );
+
+    return bLastSuccess - aLastSuccess; // Descending order
   });
 
   return (
@@ -523,7 +920,23 @@ export function Providers() {
       <CardHeader className="flex flex-col border-b p-4 gap-3">
         <div className="flex flex-row items-center justify-between">
           <CardTitle className="text-lg">{t("providers.title")} <span className="text-sm font-normal text-gray-500">({filteredProviders.length}/{validProviders.length})</span></CardTitle>
-          <Button onClick={handleAddProvider}>{t("providers.add")}</Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={handleBatchTestAll}
+            >
+              <Play className="h-4 w-4" />
+              {t("providers.test")}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleClearRequestStats}
+            >
+              <Trash2 className="h-4 w-4" />
+              {t("providers.clear_request_stats")}
+            </Button>
+            <Button onClick={handleAddProvider}>{t("providers.add")}</Button>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <div className="relative flex-1">
@@ -548,21 +961,29 @@ export function Providers() {
       </CardHeader>
       <CardContent className="flex-grow overflow-y-auto p-4">
         <ProviderList
-          providers={filteredProviders}
+          providers={sortedProviders}
           onEdit={handleEditProvider}
           onRemove={handleSetDeletingProviderIndex}
+          showToast={showToast}
+          removeToast={removeToast}
+          requestStats={requestStats}
+          testPrompt={config?.TEST_PROMPT}
+          hoveredModel={hoveredModel}
+          onBadgeRef={onBadgeRef}
+          searchTerm={searchTerm}
+          onBatchTestProvider={handleBatchTestProvider}
         />
       </CardContent>
 
       {/* Edit Dialog */}
-      <Dialog open={editingProviderIndex !== null} onOpenChange={(open) => {
+      <Dialog open={editingProviderIndex !== null && !showNewApiAssignment} onOpenChange={(open) => {
         if (!open) {
           handleCancelAddProvider();
         }
       }}>
         <DialogContent className="max-h-[80vh] flex flex-col sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{t("providers.edit")}</DialogTitle>
+            <DialogTitle>{isNewProvider ? t("providers.add") : t("providers.edit")}</DialogTitle>
           </DialogHeader>
           {editingProvider && editingProviderIndex !== null && (
             <div className="space-y-4 p-4 overflow-y-auto flex-grow">
@@ -602,32 +1023,188 @@ export function Providers() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="api_key">{t("providers.api_key")}</Label>
-                <div className="relative">
-                  <Input 
-                    id="api_key" 
-                    type={showApiKey[editingProviderIndex || 0] ? "text" : "password"} 
-                    value={editingProvider.api_key || ''} 
-                    onChange={(e) => handleProviderChange(editingProviderIndex, 'api_key', e.target.value)} 
-                    className={apiKeyError ? "border-red-500" : ""}
-                  />
+                <div className="space-y-2">
+                  {(() => {
+                    // Normalize api_key to array of entries
+                    const rawKeys = Array.isArray(editingProvider.api_key)
+                      ? editingProvider.api_key
+                      : [editingProvider.api_key || ''];
+
+                    // Helper to extract key string from string or ApiKeyEntry
+                    const getKeyString = (entry: string | ApiKeyEntry): string =>
+                      typeof entry === 'string' ? entry : (entry?.key || '');
+
+                    const getKeyModels = (entry: string | ApiKeyEntry): string[] =>
+                      typeof entry === 'string' ? [] : (entry.models || []);
+
+                    return rawKeys.map((entry, keyIndex) => {
+                      const keyModels = getKeyModels(entry) || [];
+                      const keyInputId = `${editingProviderIndex}:${keyIndex}`;
+                      const keyModelInput = keyModelInputs[keyInputId] || "";
+                      const addModelToCurrentKey = () => {
+                        const model = keyModelInput.trim();
+                        if (!model) return;
+                        handleKeyAddModel(keyIndex, model);
+                        setKeyModelInputs(prev => ({ ...prev, [keyInputId]: "" }));
+                      };
+
+                      return (
+                        <div key={keyIndex} className="space-y-1.5 rounded-md border bg-muted/20 p-2.5">
+                          {rawKeys.length > 1 && (
+                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                              <span>{t("providers.api_key_index", { index: keyIndex + 1 })}</span>
+                              {keyModels.length > 0 && (
+                                <span>{t("providers.key_model_count", { count: keyModels.length })}</span>
+                              )}
+                            </div>
+                          )}
+                          <div className="relative">
+                            <Input
+                              id={`api_key_${keyIndex}`}
+                              type={showApiKey[`${editingProviderIndex}_${keyIndex}`] ? "text" : "password"}
+                              value={getKeyString(entry)}
+                              onChange={(e) => {
+                                const newKeys = [...rawKeys];
+                                if (typeof entry === 'string') {
+                                  newKeys[keyIndex] = e.target.value;
+                                } else {
+                                  newKeys[keyIndex] = { ...entry, key: e.target.value };
+                                }
+                                if (newKeys.length === 1 && !Array.isArray(editingProvider.api_key) && typeof newKeys[0] === 'string') {
+                                  handleProviderChange(editingProviderIndex, 'api_key', e.target.value);
+                                } else {
+                                  handleProviderChange(editingProviderIndex, 'api_key', newKeys);
+                                }
+                              }}
+                              className={`${apiKeyError ? "border-red-500" : ""} ${rawKeys.length > 1 ? "pr-20" : "pr-12"}`}
+                            />
+                            <div className="absolute right-2 top-1/2 transform -translate-y-1/2 flex gap-1">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                onClick={() => {
+                                  const index = `${editingProviderIndex}_${keyIndex}`;
+                                  setShowApiKey(prev => ({
+                                    ...prev,
+                                    [index]: !prev[index]
+                                  }));
+                                }}
+                                aria-label={t("providers.toggle_api_key_visibility", { index: keyIndex + 1 })}
+                              >
+                                {showApiKey[`${editingProviderIndex}_${keyIndex}`] ? (
+                                  <EyeOff className="h-4 w-4" />
+                                ) : (
+                                  <Eye className="h-4 w-4" />
+                                )}
+                              </Button>
+                              {rawKeys.length > 1 && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => {
+                                    const newKeys = rawKeys.filter((_, i) => i !== keyIndex);
+                                    if (newKeys.length === 1 && typeof newKeys[0] === 'string') {
+                                      handleProviderChange(editingProviderIndex, 'api_key', newKeys[0]);
+                                    } else {
+                                      handleProviderChange(editingProviderIndex, 'api_key', newKeys);
+                                    }
+                                    setKeyModelInputs({});
+                                  }}
+                                  aria-label={t("providers.remove_api_key", { index: keyIndex + 1 })}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            <Input
+                              placeholder={t("providers.models_placeholder")}
+                              value={keyModelInput}
+                              onChange={(e) => setKeyModelInputs(prev => ({ ...prev, [keyInputId]: e.target.value }))}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  addModelToCurrentKey();
+                                }
+                              }}
+                              className="flex-1"
+                            />
+                            <Button
+                              size="icon"
+                              disabled={!keyModelInput.trim()}
+                              onClick={addModelToCurrentKey}
+                              aria-label={t("providers.add_model")}
+                            >
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          {keyModels.length > 0 && (
+                            <div className="flex flex-wrap gap-1 pt-0.5">
+                              {keyModels.map((model, modelIdx) => {
+                                const status = getRequestStatus(requestStats, editingProvider.name || '', model);
+                                return (
+                                  <Badge
+                                    key={model}
+                                    variant="outline"
+                                    className={`font-normal flex items-center gap-1 text-xs ${getStatusBadgeClasses(status)}`}
+                                  >
+                                    {model}
+                                    <button
+                                      type="button"
+                                      className="ml-1 rounded-full hover:bg-gray-200"
+                                      onClick={() => handleKeyRemoveModel(keyIndex, modelIdx)}
+                                      aria-label={t("providers.remove_model_from_key", { model, index: keyIndex + 1 })}
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </button>
+                                  </Badge>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {/* Per-key stats summary */}
+                          {rawKeys.length > 1 && (() => {
+                            const providerName = editingProvider.name || '';
+                            const keyStats = requestStats?.filter(
+                              (s: any) => s.provider === providerName && s.keyIndex === keyIndex
+                            ) || [];
+                            const totalSuccess = keyStats.reduce((sum: number, s: any) => sum + (s.success || 0), 0);
+                            const totalFail = keyStats.reduce((sum: number, s: any) => sum + (s.fail || 0), 0);
+                            if (totalSuccess === 0 && totalFail === 0) return null;
+                            return (
+                              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                <span className="text-emerald-600 flex items-center gap-0.5">
+                                  <Check className="h-3 w-3" /> {totalSuccess}
+                                </span>
+                                <span className="text-rose-600 flex items-center gap-0.5">
+                                  <X className="h-3 w-3" /> {totalFail}
+                                </span>
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      );
+                    });
+                  })()}
                   <Button
                     type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="absolute right-2 top-1/2 transform -translate-y-1/2 h-8 w-8"
+                    variant="outline"
+                    size="sm"
+                    className="w-full"
                     onClick={() => {
-                      const index = editingProviderIndex || 0;
-                      setShowApiKey(prev => ({
-                        ...prev,
-                        [index]: !prev[index]
-                      }));
+                      const rawKeys = Array.isArray(editingProvider.api_key)
+                        ? [...editingProvider.api_key, '']
+                        : [editingProvider.api_key || '', ''];
+                      handleProviderChange(editingProviderIndex, 'api_key', rawKeys);
                     }}
                   >
-                    {showApiKey[editingProviderIndex || 0] ? (
-                      <EyeOff className="h-4 w-4" />
-                    ) : (
-                      <Eye className="h-4 w-4" />
-                    )}
+                    <Plus className="h-4 w-4 mr-2" />
+                    {t("providers.add_api_key")}
                   </Button>
                 </div>
                 {apiKeyError && (
@@ -635,90 +1212,83 @@ export function Providers() {
                 )}
               </div>
               <div className="space-y-2">
-                <Label htmlFor="models">{t("providers.models")}</Label>
-                <div className="space-y-2">
-                  <div className="flex gap-2">
-                    <div className="flex-1">
-                      {hasFetchedModels[editingProviderIndex] ? (
-                        <ComboInput
-                          ref={comboInputRef}
-                          options={(editingProvider.models || []).map((model: string) => ({ label: model, value: model }))}
-                          value=""
-                          onChange={() => {
-                            // 只更新输入值，不添加模型
-                          }}
-                          onEnter={(value) => {
-                            if (editingProviderIndex !== null) {
-                              handleAddModel(editingProviderIndex, value);
-                            }
-                          }}
-                          inputPlaceholder={t("providers.models_placeholder")}
-                        />
-                      ) : (
-                        <Input 
-                          id="models" 
-                          placeholder={t("providers.models_placeholder")} 
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && e.currentTarget.value.trim() && editingProviderIndex !== null) {
-                              handleAddModel(editingProviderIndex, e.currentTarget.value);
-                              e.currentTarget.value = '';
-                            }
-                          }}
-                        />
-                      )}
-                    </div>
-                    <Button 
+                <div className="flex items-center justify-between">
+                  <Label>{t("providers.models_all_keys")}</Label>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleFetchModels}
+                    disabled={isFetchingModels}
+                  >
+                    {isFetchingModels ? "..." : t('model_selector.fetch_from_endpoint')}
+                  </Button>
+                </div>
+                {editingProviderModels.length > 0 ? (
+                  <div className="flex flex-wrap gap-2 pt-2" data-model-badges>
+                    {editingProviderModels.map((model: string, modelIndex: number) => {
+                      const status = getRequestStatus(requestStats, editingProvider.name || '', model);
+                      return (
+                        <Badge key={modelIndex} variant="outline" className={`font-normal flex items-center gap-1 ${getStatusBadgeClasses(status)}`}>
+                          {model}
+                          <button
+                            type="button"
+                            className="ml-1 rounded-full hover:bg-gray-200"
+                            onClick={() => editingProviderIndex !== null && handleProviderModelRemove(modelIndex)}
+                            aria-label={t("providers.remove_model_from_all_keys", { model })}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </Badge>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-md border border-dashed bg-muted/20 px-3 py-4 text-sm text-muted-foreground">
+                    {t("providers.models_empty")}
+                  </div>
+                )}
+                {/* Remove error models button — only shown when error models exist */}
+                {(() => {
+                  const allKeyModels = computeAllKeyModelsUnion(editingProvider.api_key);
+                  const errorModels = allKeyModels.filter(
+                    (model: string) => getRequestStatus(requestStats, editingProvider.name || '', model) === 'error'
+                  );
+                  if (errorModels.length === 0) return null;
+                  return (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-1 text-red-600 border-red-300 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:border-red-700 dark:hover:bg-red-900/20"
                       onClick={() => {
-                        if (hasFetchedModels[editingProviderIndex] && comboInputRef.current) {
-                          // 使用ComboInput的逻辑
-                          const comboInput = comboInputRef.current as unknown as { getCurrentValue(): string; clearInput(): void };
-                          const currentValue = comboInput.getCurrentValue();
-                          if (currentValue && currentValue.trim() && editingProviderIndex !== null) {
-                            handleAddModel(editingProviderIndex, currentValue.trim());
-                            // 清空ComboInput
-                            comboInput.clearInput();
-                          }
-                        } else {
-                          // 使用普通Input的逻辑
-                          const input = document.getElementById('models') as HTMLInputElement;
-                          if (input && input.value.trim() && editingProviderIndex !== null) {
-                            handleAddModel(editingProviderIndex, input.value);
-                            input.value = '';
-                          }
-                        }
+                        setEditingProviderData(prev => {
+                          if (!prev) return prev;
+
+                          const rawKeys = Array.isArray(prev.api_key) ? [...prev.api_key] : [prev.api_key];
+
+                          // Remove all error models from all keys
+                          rawKeys.forEach((entry, idx) => {
+                            if (typeof entry !== 'string' && entry.models) {
+                              const filtered = entry.models.filter(m => !errorModels.includes(m));
+                              rawKeys[idx] = { ...entry, models: filtered };
+                            }
+                          });
+
+                          return { ...prev, api_key: rawKeys };
+                        });
+                        showToast(t("providers.removed_error_models", { count: errorModels.length }), "success");
                       }}
                     >
-                      {t("providers.add_model")}
+                      <Trash2 className="h-3.5 w-3.5 mr-1" />
+                      {t("providers.remove_error_models", { count: errorModels.length })}
                     </Button>
-                    {/* <Button 
-                      onClick={() => editingProvider && fetchAvailableModels(editingProvider)}
-                      disabled={isFetchingModels}
-                      variant="outline"
-                    >
-                      {isFetchingModels ? t("providers.fetching_models") : t("providers.fetch_available_models")}
-                    </Button> */}
-                  </div>
-                  <div className="flex flex-wrap gap-2 pt-2">
-                    {(editingProvider.models || []).map((model: string, modelIndex: number) => (
-                      <Badge key={modelIndex} variant="outline" className="font-normal flex items-center gap-1">
-                        {model}
-                        <button 
-                          type="button" 
-                          className="ml-1 rounded-full hover:bg-gray-200"
-                          onClick={() => editingProviderIndex !== null && handleRemoveModel(editingProviderIndex, modelIndex)}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
+                  );
+                })()}
               </div>
-              
+
               {/* Provider Transformer Selection */}
               <div className="space-y-2">
                 <Label>{t("providers.provider_transformer")}</Label>
-                
+
                 {/* Add new transformer */}
                 <div className="flex gap-2">
                   <Combobox
@@ -734,39 +1304,45 @@ export function Providers() {
                     }}
                     placeholder={t("providers.select_transformer")}
                     emptyPlaceholder={t("providers.no_transformers")}
+                    modal={true}
                   />
                 </div>
-                
+
                 {/* Display existing transformers */}
-                {editingProvider.transformer?.use && editingProvider.transformer.use.length > 0 && (
-                  <div className="space-y-2 mt-2">
+                {editingProvider.transformer?.use && editingProvider.transformer.use.length > 0 ? (
+                  <div className="space-y-1.5 mt-2">
                     <div className="text-sm font-medium text-gray-700">{t("providers.selected_transformers")}</div>
                     {editingProvider.transformer.use.map((transformer: string | (string | Record<string, unknown> | { max_tokens: number })[], transformerIndex: number) => (
-                      <div key={transformerIndex} className="border rounded-md p-3">
-                        <div className="flex gap-2 items-center mb-2">
-                          <div className="flex-1 bg-gray-50 rounded p-2 text-sm">
+                      <div key={transformerIndex} className="border rounded-md p-2">
+                        <div className="flex gap-2 items-center mb-1.5">
+                          <div className="flex-1 bg-gray-50 rounded px-2 py-1.5 text-sm leading-tight">
                             {typeof transformer === 'string' ? transformer : Array.isArray(transformer) ? String(transformer[0]) : String(transformer)}
                           </div>
-                          <Button 
-                            variant="outline" 
+                          <Button
+                            variant="outline"
                             size="icon"
+                            className="h-8 w-8"
                             onClick={() => {
                               if (editingProviderIndex !== null) {
                                 removeProviderTransformerAtIndex(editingProviderIndex, transformerIndex);
                               }
                             }}
+                            aria-label={t("providers.remove_provider_transformer", {
+                              transformer: typeof transformer === 'string' ? transformer : Array.isArray(transformer) ? String(transformer[0]) : String(transformer)
+                            })}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
-                        
+
                         {/* Transformer-specific Parameters */}
-                        <div className="mt-2 pl-4 border-l-2 border-gray-200">
-                          <Label className="text-sm">{t("providers.transformer_parameters")}</Label>
-                          <div className="space-y-2 mt-1">
-                            <div className="flex gap-2">
-                              <Input 
+                        <div className="mt-1.5 pl-3 border-l-2 border-gray-200">
+                          <Label className="text-xs text-gray-600">{t("providers.transformer_parameters")}</Label>
+                          <div className="space-y-1.5 mt-1">
+                            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                              <Input
                                 placeholder={t("providers.parameter_name")}
+                                className="h-8"
                                 value={providerParamInputs[`provider-${editingProviderIndex}-transformer-${transformerIndex}`]?.name || ""}
                                 onChange={(e) => {
                                   const key = `provider-${editingProviderIndex}-transformer-${transformerIndex}`;
@@ -779,8 +1355,9 @@ export function Providers() {
                                   }));
                                 }}
                               />
-                              <Input 
+                              <Input
                                 placeholder={t("providers.parameter_value")}
+                                className="h-8"
                                 value={providerParamInputs[`provider-${editingProviderIndex}-transformer-${transformerIndex}`]?.value || ""}
                                 onChange={(e) => {
                                   const key = `provider-${editingProviderIndex}-transformer-${transformerIndex}`;
@@ -793,8 +1370,9 @@ export function Providers() {
                                   }));
                                 }}
                               />
-                              <Button 
+                              <Button
                                 size="sm"
+                                className="h-8 px-2 sm:w-8"
                                 onClick={() => {
                                   if (editingProviderIndex !== null) {
                                     const key = `provider-${editingProviderIndex}-transformer-${transformerIndex}`;
@@ -808,11 +1386,14 @@ export function Providers() {
                                     }
                                   }
                                 }}
+                                aria-label={t("providers.add_provider_transformer_parameter", {
+                                  transformer: typeof transformer === 'string' ? transformer : Array.isArray(transformer) ? String(transformer[0]) : String(transformer)
+                                })}
                               >
                                 <Plus className="h-4 w-4" />
                               </Button>
                             </div>
-                            
+
                             {/* Display existing parameters for this transformer */}
                             {(() => {
                               // Get parameters for this specific transformer
@@ -847,6 +1428,10 @@ export function Providers() {
                                             removeProviderTransformerParameterAtIndex(editingProviderIndex, transformerIndex, key);
                                           }
                                         }}
+                                        aria-label={t("providers.remove_provider_transformer_parameter", {
+                                          parameter: key,
+                                          transformer: typeof transformer === 'string' ? transformer : Array.isArray(transformer) ? String(transformer[0]) : String(transformer)
+                                        })}
                                       >
                                         <X className="h-3 w-3" />
                                       </Button>
@@ -860,17 +1445,54 @@ export function Providers() {
                       </div>
                     ))}
                   </div>
+                ) : (
+                  <div className="rounded-md border border-dashed bg-muted/20 px-3 py-4 text-sm text-muted-foreground">
+                    {t("providers.provider_transformers_empty")}
+                  </div>
                 )}
               </div>
               
               {/* Model-specific Transformers */}
-              {editingProvider.models && editingProvider.models.length > 0 && (
-                <div className="space-y-2">
+              <div className="space-y-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <Label>{t("providers.model_transformers")}</Label>
-                  <div className="space-y-3">
-                    {(editingProvider.models || []).map((model: string, modelIndex: number) => (
-                      <div key={modelIndex} className="border rounded-md p-3">
-                        <div className="font-medium text-sm mb-2">{model}</div>
+                  {editingProviderModels.length > 0 && (
+                    <div className="relative w-full sm:w-72">
+                      <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
+                      <Input
+                        value={modelTransformerSearch}
+                        onChange={(e) => setModelTransformerSearch(e.target.value)}
+                        placeholder={t("providers.model_transformer_search")}
+                        className="h-9 pl-8 pr-9"
+                      />
+                      {modelTransformerSearch && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
+                          onClick={() => setModelTransformerSearch("")}
+                          aria-label={t("app.cancel")}
+                        >
+                          <XCircle className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {editingProviderModels.length === 0 ? (
+                  <div className="rounded-md border border-dashed bg-muted/20 px-3 py-4 text-sm text-muted-foreground">
+                    {t("providers.model_transformers_empty")}
+                  </div>
+                ) : filteredModelTransformerModels.length === 0 ? (
+                  <div className="rounded-md border border-dashed bg-muted/20 px-3 py-4 text-sm text-muted-foreground">
+                    {t("providers.model_transformers_no_results", { term: modelTransformerSearch.trim() })}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {filteredModelTransformerModels.map((model: string, modelIndex: number) => (
+                      <div key={modelIndex} className="border rounded-md p-2">
+                        <div className="font-medium text-sm mb-1.5">{model}</div>
                         {/* Add new transformer */}
                         <div className="flex gap-2">
                           <div className="flex-1 flex gap-2">
@@ -887,40 +1509,47 @@ export function Providers() {
                               }}
                               placeholder={t("providers.select_transformer")}
                               emptyPlaceholder={t("providers.no_transformers")}
+                              modal={true}
                             />
                           </div>
                         </div>
-                        
+
                         {/* Display existing transformers */}
                         {editingProvider.transformer?.[model]?.use && editingProvider.transformer[model].use.length > 0 && (
-                          <div className="space-y-2 mt-2">
+                          <div className="space-y-1.5 mt-2">
                             <div className="text-sm font-medium text-gray-700">{t("providers.selected_transformers")}</div>
                             {editingProvider.transformer[model].use.map((transformer: string | (string | Record<string, unknown> | { max_tokens: number })[], transformerIndex: number) => (
-                              <div key={transformerIndex} className="border rounded-md p-3">
-                                <div className="flex gap-2 items-center mb-2">
-                                  <div className="flex-1 bg-gray-50 rounded p-2 text-sm">
+                              <div key={transformerIndex} className="border rounded-md p-2">
+                                <div className="flex gap-2 items-center mb-1.5">
+                                  <div className="flex-1 bg-gray-50 rounded px-2 py-1.5 text-sm leading-tight">
                                     {typeof transformer === 'string' ? transformer : Array.isArray(transformer) ? String(transformer[0]) : String(transformer)}
                                   </div>
-                                  <Button 
-                                    variant="outline" 
+                                  <Button
+                                    variant="outline"
                                     size="icon"
+                                    className="h-8 w-8"
                                     onClick={() => {
                                       if (editingProviderIndex !== null) {
                                         removeModelTransformerAtIndex(editingProviderIndex, model, transformerIndex);
                                       }
                                     }}
+                                    aria-label={t("providers.remove_model_transformer", {
+                                      transformer: typeof transformer === 'string' ? transformer : Array.isArray(transformer) ? String(transformer[0]) : String(transformer),
+                                      model
+                                    })}
                                   >
                                     <Trash2 className="h-4 w-4" />
                                   </Button>
                                 </div>
-                                
+
                                 {/* Transformer-specific Parameters */}
-                                <div className="mt-2 pl-4 border-l-2 border-gray-200">
-                                  <Label className="text-sm">{t("providers.transformer_parameters")}</Label>
-                                  <div className="space-y-2 mt-1">
-                                    <div className="flex gap-2">
-                                      <Input 
+                                <div className="mt-1.5 pl-3 border-l-2 border-gray-200">
+                                  <Label className="text-xs text-gray-600">{t("providers.transformer_parameters")}</Label>
+                                  <div className="space-y-1.5 mt-1">
+                                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                                      <Input
                                         placeholder={t("providers.parameter_name")}
+                                        className="h-8"
                                         value={modelParamInputs[`model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`]?.name || ""}
                                         onChange={(e) => {
                                           const key = `model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`;
@@ -933,8 +1562,9 @@ export function Providers() {
                                           }));
                                         }}
                                       />
-                                      <Input 
+                                      <Input
                                         placeholder={t("providers.parameter_value")}
+                                        className="h-8"
                                         value={modelParamInputs[`model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`]?.value || ""}
                                         onChange={(e) => {
                                           const key = `model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`;
@@ -947,8 +1577,9 @@ export function Providers() {
                                           }));
                                         }}
                                       />
-                                      <Button 
+                                      <Button
                                         size="sm"
+                                        className="h-8 px-2 sm:w-8"
                                         onClick={() => {
                                           if (editingProviderIndex !== null) {
                                             const key = `model-${editingProviderIndex}-${model}-transformer-${transformerIndex}`;
@@ -962,28 +1593,32 @@ export function Providers() {
                                             }
                                           }
                                         }}
+                                        aria-label={t("providers.add_model_transformer_parameter", {
+                                          transformer: typeof transformer === 'string' ? transformer : Array.isArray(transformer) ? String(transformer[0]) : String(transformer),
+                                          model
+                                        })}
                                       >
                                         <Plus className="h-4 w-4" />
                                       </Button>
                                     </div>
-                                    
+
                                     {/* Display existing parameters for this transformer */}
                                     {(() => {
                                       // Get parameters for this specific transformer
                                       if (!editingProvider.transformer?.[model]?.use || editingProvider.transformer[model].use.length <= transformerIndex) {
                                         return null;
                                       }
-                                      
+
                                       const targetTransformer = editingProvider.transformer[model].use[transformerIndex];
                                       let params = {};
-                                      
+
                                       if (Array.isArray(targetTransformer) && targetTransformer.length > 1) {
                                         // Check if the second element is an object (parameters object)
                                         if (typeof targetTransformer[1] === 'object' && targetTransformer[1] !== null) {
                                           params = targetTransformer[1] as Record<string, unknown>;
                                         }
                                       }
-                                      
+
                                       return Object.keys(params).length > 0 ? (
                                         <div className="space-y-1">
                                           {Object.entries(params).map(([key, value]) => (
@@ -991,8 +1626,8 @@ export function Providers() {
                                               <div className="text-sm">
                                                 <span className="font-medium">{key}:</span> {String(value)}
                                               </div>
-                                              <Button 
-                                                variant="ghost" 
+                                              <Button
+                                                variant="ghost"
                                                 size="sm"
                                                 className="h-6 w-6 p-0"
                                                 onClick={() => {
@@ -1001,6 +1636,11 @@ export function Providers() {
                                                     removeModelTransformerParameterAtIndex(editingProviderIndex, model, transformerIndex, key);
                                                   }
                                                 }}
+                                                aria-label={t("providers.remove_model_transformer_parameter", {
+                                                  parameter: key,
+                                                  transformer: typeof transformer === 'string' ? transformer : Array.isArray(transformer) ? String(transformer[0]) : String(transformer),
+                                                  model
+                                                })}
                                               >
                                                 <X className="h-3 w-3" />
                                               </Button>
@@ -1018,15 +1658,15 @@ export function Providers() {
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
-              
+                )}
+              </div>
+
             </div>
           )}
           <div className="space-y-3 mt-auto">
             <div className="flex justify-end gap-2">
-              {/* <Button 
-                variant="outline" 
+              {/* <Button
+                variant="outline"
                 onClick={() => editingProvider && testConnectivity(editingProvider)}
                 disabled={isTestingConnectivity || !editingProvider}
               >
@@ -1054,6 +1694,128 @@ export function Providers() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* NewAPI Model Assignment Dialog */}
+      {editingProviderData && newApiPricingData && (
+        <NewApiAssignmentDialog
+          open={showNewApiAssignment}
+          onOpenChange={(open) => {
+            setShowNewApiAssignment(open);
+            if (!open) setNewApiPricingData(null);
+          }}
+          pricingData={newApiPricingData}
+          apiKeys={Array.isArray(editingProviderData.api_key) ? editingProviderData.api_key : [editingProviderData.api_key || '']}
+          apiBaseUrl={editingProviderData.api_base_url || ''}
+          existingModels={getProviderModelUnion(editingProviderData)}
+          onConfirm={handleNewApiAssignmentConfirm}
+          showToast={showToast as any}
+        />
+      )}
+
+      {/* Model Selection Dialog */}
+      <Dialog open={showModelSelectDialog} onOpenChange={handleCancelModelSelection}>
+        <DialogContent className="max-h-[80vh] flex flex-col sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{t('model_selector.title')}</DialogTitle>
+            <DialogDescription>
+              {t('model_selector.description')}
+            </DialogDescription>
+          </DialogHeader>
+          {modelFetchError ? (
+            <div className="p-4 bg-red-50 border border-red-200 rounded-md">
+              <p className="text-red-600">{modelFetchError}</p>
+            </div>
+          ) : (
+            <div className="flex-grow overflow-y-auto">
+              {/* Target API Key Selector */}
+              <div className="mb-4">
+                <Label className="mb-2 block">{t("model_selector.target_api_key")}</Label>
+                <div className="flex gap-2">
+                  {(() => {
+                    const keys = Array.isArray(editingProviderData?.api_key)
+                      ? editingProviderData.api_key
+                      : [editingProviderData?.api_key || ''];
+                    return keys.map((entry, idx) => {
+                      const keyStr = typeof entry === 'string' ? entry : (entry?.key || '');
+                      const display = keyStr.length <= 10 ? '****' : `${keyStr.substring(0, 4)}...${keyStr.substring(keyStr.length - 2)}`;
+                      return (
+                        <Button
+                          key={idx}
+                          variant={targetKeyIndex === idx ? 'default' : 'outline'}
+                          onClick={() => setTargetKeyIndex(idx)}
+                          className="flex-1"
+                        >
+                          {t("model_selector.key_option", { index: idx + 1, display })}
+                        </Button>
+                      );
+                    });
+                  })()}
+                </div>
+              </div>
+              <div className="mb-4 flex items-center gap-2 border-b pb-4">
+                <div className="relative flex-1">
+                  <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
+                  <Input
+                    placeholder={t('model_selector.search_placeholder')}
+                    value={modelSearchTerm}
+                    onChange={(e) => setModelSearchTerm(e.target.value)}
+                    className="pl-8"
+                  />
+                </div>
+                {modelSearchTerm && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setModelSearchTerm("")}
+                  >
+                    <XCircle className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+              <div className="mb-4 flex items-center gap-4 border-b pb-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={selectedModels.size === fetchedModels.length && fetchedModels.length > 0}
+                    onCheckedChange={handleSelectAll}
+                  />
+                  <span className="text-sm">{t('model_selector.select_all')}</span>
+                </label>
+                <span className="text-sm text-gray-500">
+                  {t('model_selector.selected_count', { selected: selectedModels.size, total: filteredModels.length })}
+                </span>
+              </div>
+              <div className="space-y-1">
+                {filteredModels.map((model) => (
+                  <label
+                    key={model.id}
+                    className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-md cursor-pointer border-b last:border-b-0"
+                  >
+                    <Checkbox
+                      checked={selectedModels.has(model.id)}
+                      onCheckedChange={() => handleModelToggle(model.id)}
+                    />
+                    <div className="flex-1">
+                      <div className="font-medium">{model.id}</div>
+                      {model.owned_by && (
+                        <div className="text-xs text-gray-500">{model.owned_by}</div>
+                      )}
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={handleCancelModelSelection}>
+              {t('model_selector.cancel')}
+            </Button>
+            <Button onClick={handleConfirmModelSelection} disabled={selectedModels.size === 0}>
+              {t('model_selector.confirm', { count: selectedModels.size })}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </Card>
   );
 }

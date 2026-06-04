@@ -1,9 +1,13 @@
-import Server, { calculateTokenCount, TokenizerService } from "@musistudio/llms";
+// @ts-ignore - requestStatsService is exported but not in type definitions
+import Server, { calculateTokenCount, TokenizerService, requestStatsService, ConfigService, parseStatsKey } from "@musistudio/llms";
 import { readConfigFile, writeConfigFile, backupConfigFile } from "./utils";
+import { CONFIG_FILE } from "@CCR/shared";
 import { join } from "path";
 import fastifyStatic from "@fastify/static";
-import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, rmSync } from "fs";
+import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, rmSync, watch, openSync, readSync, closeSync } from "fs";
+import { stat } from "fs/promises";
 import { homedir } from "os";
+import { ProxyAgent } from "undici";
 import {
   getPresetDir,
   readManifestFromDir,
@@ -24,10 +28,97 @@ import {
 } from "@CCR/shared";
 import fastifyMultipart from "@fastify/multipart";
 import AdmZip from "adm-zip";
+import { batchTestService } from "./batch-test-service";
+import { canonicalizeExternalConfig } from "@CCR/shared";
+// requestStatsService and ConfigService are imported at the top level
+
+const CCR_MODEL_TEST_TIMEOUT_MS = 20_000;
+const CCR_TEST_KEY_INDEX_HEADER = "x-ccr-test-key-index";
+const CCR_TEST_DISABLE_FALLBACK_HEADER = "x-ccr-test-disable-fallback";
+
+function resolveUiDistRoot(): string {
+  const candidates = [
+    join(__dirname, "..", "dist"),
+    join(__dirname, "..", "..", "ui", "dist"),
+    join(process.cwd(), "..", "ui", "dist"),
+    join(process.cwd(), "packages", "ui", "dist"),
+    join(process.cwd(), "dist"),
+  ];
+
+  return candidates.find(candidate => existsSync(join(candidate, "index.html"))) || candidates[0];
+}
+
+function serializeRequestStatsItem(key: string, value: any, includeDetails = false) {
+  const parsed = parseStatsKey(key);
+  const lastSuccessAt = value?.lastSuccessRequest?.timestamp;
+  const lastFailureAt = value?.lastFailureRequest?.timestamp;
+
+  return {
+    key,
+    provider: parsed.provider,
+    model: parsed.model,
+    ...(parsed.keyIndex !== undefined ? { keyIndex: parsed.keyIndex } : {}),
+    success: value?.success || 0,
+    fail: value?.fail || 0,
+    lastSuccessAt,
+    lastFailureAt,
+    lastFailureStatusCode: value?.lastFailureRequest?.statusCode,
+    lastSuccessRequest: includeDetails
+      ? value?.lastSuccessRequest
+      : lastSuccessAt
+        ? { timestamp: lastSuccessAt }
+        : undefined,
+    lastFailureRequest: includeDetails
+      ? value?.lastFailureRequest
+      : lastFailureAt
+        ? {
+            timestamp: lastFailureAt,
+            statusCode: value?.lastFailureRequest?.statusCode,
+          }
+        : undefined,
+    lastRequest: includeDetails ? value?.lastRequest : undefined,
+  };
+}
+
+function serializeRequestStatsMap(allStats: Map<string, any>, includeDetails = false) {
+  const statsArray: any[] = [];
+  allStats.forEach((value: any, key: string) => {
+    statsArray.push(serializeRequestStatsItem(key, value, includeDetails));
+  });
+  return statsArray;
+}
 
 export const createServer = async (config: any): Promise<any> => {
   const server = new Server(config);
   const app = server.app;
+
+  // Track SSE clients for config broadcasting
+  const sseClients = new Set<any>();
+  let configWatcher: any = null;
+  // Guard against self-triggered config watch events (internal writes from POST /api/config)
+  let isInternalConfigWrite = false;
+  let configWatchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  // Plugins directory watcher for hot-reload
+  let pluginsWatcher: any = null;
+  let pluginsWatchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  const PLUGINS_DIR = join(homedir(), ".claude-code-router", "plugins");
+
+  // Broadcast config change to all connected clients
+  const broadcastConfigChange = (configData: any) => {
+    const event = {
+      type: 'config_update',
+      data: configData,
+      timestamp: Date.now()
+    };
+    sseClients.forEach(res => {
+      try {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      } catch (e) {
+        // Client disconnected, remove from set
+        sseClients.delete(res);
+      }
+    });
+  };
 
   app.register(fastifyMultipart, {
     limits: {
@@ -84,7 +175,7 @@ export const createServer = async (config: any): Promise<any> => {
 
   // Add endpoint to read config.json with access control
   app.get("/api/config", async (req: any, reply: any) => {
-    return await readConfigFile();
+    return canonicalizeExternalConfig(await readConfigFile());
   });
 
   app.get("/api/transformers", async (req: any, reply: any) => {
@@ -101,7 +192,7 @@ export const createServer = async (config: any): Promise<any> => {
 
   // Add endpoint to save config.json with access control
   app.post("/api/config", async (req: any, reply: any) => {
-    const newConfig = req.body;
+    const newConfig = canonicalizeExternalConfig(req.body);
 
     // Backup existing config file if it exists
     const backupPath = await backupConfigFile();
@@ -109,13 +200,471 @@ export const createServer = async (config: any): Promise<any> => {
       console.log(`Backed up existing configuration file to ${backupPath}`);
     }
 
-    await writeConfigFile(newConfig);
-    return { success: true, message: "Config saved successfully" };
+    // Detect removed transformers that point to plugins directory
+    // and delete the corresponding plugin files
+    try {
+      const oldConfig = await readConfigFile();
+      const oldTransformers = Array.isArray(oldConfig.transformers) ? oldConfig.transformers : [];
+      const newTransformers = Array.isArray(newConfig.transformers) ? newConfig.transformers : [];
+
+      // Find transformers that were removed
+      const oldPaths = new Set<string>(oldTransformers.map((t: any) => t.path).filter(Boolean) as string[]);
+      const newPaths = new Set<string>(newTransformers.map((t: any) => t.path).filter(Boolean) as string[]);
+
+      for (const oldPath of oldPaths) {
+        if (!newPaths.has(oldPath) && oldPath.startsWith(PLUGINS_DIR)) {
+          // This transformer was removed and points to plugins directory
+          // Delete the plugin file
+          if (existsSync(oldPath)) {
+            console.log(`Deleting plugin file (removed from config): ${oldPath}`);
+            unlinkSync(oldPath);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error detecting removed transformers:', err);
+    }
+
+    // Add lastModified timestamp
+    const configWithTimestamp = {
+      ...newConfig,
+      _lastModified: Date.now()
+    };
+
+    // Mark as internal write to prevent config watcher from re-triggering
+    isInternalConfigWrite = true;
+    await writeConfigFile(configWithTimestamp);
+    // Reset flag after fs.watch has had time to fire (500ms buffer)
+    setTimeout(() => { isInternalConfigWrite = false; }, 500);
+
+    // Actively trigger hot-reload after writing config
+    // (fs.watch is intentionally skipped for internal writes to prevent loops,
+    //  so we must reload services directly here)
+    try {
+      const configService = (app as any)._server?.configService as ConfigService;
+      if (configService) {
+        const result = await configService.reloadWithValidation();
+        if (result.valid && result.config) {
+          broadcastConfigChange(result.config);
+        }
+      }
+    } catch (err) {
+      console.error('Error during post-save hot-reload:', err);
+    }
+
+    return { success: true, message: "Config saved successfully", lastModified: configWithTimestamp._lastModified };
+  });
+
+  /**
+   * Extract response content from various response formats
+   * Supports: OpenAI format, Anthropic format, and generic formats
+   */
+  function extractResponseContent(data: any): string {
+    // OpenAI format: choices[0].message.content
+    // Use typeof check to handle empty string correctly (empty string is falsy)
+    const message = data.choices?.[0]?.message;
+    if (message) {
+      if (typeof message.content === 'string' && message.content) {
+        return message.content;
+      }
+      // Fallback: reasoning_content for reasoning models (e.g. GLM, DeepSeek)
+      // When content is empty due to token exhaustion, reasoning_content may still have useful output
+      if (typeof message.reasoning_content === 'string' && message.reasoning_content) {
+        return message.reasoning_content;
+      }
+    }
+
+    // Anthropic format: find first text block in content array
+    // Extended thinking responses have content[0] as thinking block, text is in a later block
+    if (Array.isArray(data.content)) {
+      const textBlock = data.content.find((block: any) => block.type === 'text' && block.text);
+      if (textBlock) {
+        return textBlock.text;
+      }
+      // Fallback: first block with text property (non-typed responses)
+      const anyTextBlock = data.content.find((block: any) => typeof block.text === 'string' && block.text);
+      if (anyTextBlock) {
+        return anyTextBlock.text;
+      }
+    }
+
+    // Direct content field
+    if (typeof data.content === 'string') {
+      return data.content;
+    }
+
+    // Generic text field
+    if (typeof data.text === 'string') {
+      return data.text;
+    }
+
+    // Nested message content
+    if (data.message && typeof data.message.content === 'string') {
+      return data.message.content;
+    }
+
+    // Return empty string if no format matches
+    return '';
+  }
+
+  function parseResponsePayload(payload: string): any {
+    if (!payload) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(payload);
+    } catch {
+      return payload;
+    }
+  }
+
+  function normalizeErrorPayload(payload: any): any {
+    if (!payload || typeof payload !== "object") {
+      return payload || "Unknown error";
+    }
+
+    return payload.error || payload;
+  }
+
+  /**
+   * Execute a single model test, reusable by both the API route and BatchTestService.
+   * Returns a result object without touching reply - caller handles HTTP response.
+   * Accepts an optional AbortSignal for external cancellation (e.g. batch test cancel).
+   */
+  async function executeModelTest(
+    provider: string,
+    model: string,
+    message?: string,
+    externalSignal?: AbortSignal,
+    specificKeyIndex?: number
+  ): Promise<{ success: boolean; status?: number; response?: string; error?: any; rawResponse?: any; debug?: any; keyIndex?: number }> {
+    const serverInstance = (app as any)._server;
+    const providerService = serverInstance?.providerService;
+
+    if (!providerService) {
+      return { success: false, error: "Service is initializing, please try again later" };
+    }
+
+    let providerData = providerService.getProvider(provider);
+    if (!providerData) {
+      // Reload config and retry once
+      providerService.reload();
+      providerData = providerService.getProvider(provider);
+      if (!providerData) {
+        return { success: false, error: `Provider '${provider}' not found` };
+      }
+    }
+
+    // Model name validation removed: if the model name is wrong,
+    // the upstream API will return its own error message.
+
+    const configService = serverInstance.configService as ConfigService;
+    const testMessage = message || configService.get("TEST_PROMPT") || "Hello, please respond with 'OK' if you can understand this message.";
+    const requestedModel = `${provider},${model}`;
+    const debug = {
+      mode: "ccr-v1-messages",
+      entrypoint: "/v1/messages",
+      requestedModel,
+      ...(specificKeyIndex !== undefined ? { keyIndex: specificKeyIndex } : {}),
+    };
+
+    if (externalSignal?.aborted) {
+      return { success: false, status: 499, error: "Cancelled", debug };
+    }
+
+    let timedOut = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, CCR_MODEL_TEST_TIMEOUT_MS);
+    const onExternalAbort = () => controller.abort();
+    externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+
+    try {
+      const requestBody = {
+        model: requestedModel,
+        messages: [{ role: "user", content: testMessage }],
+        max_tokens: 300,
+        stream: false
+      };
+
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        [CCR_TEST_DISABLE_FALLBACK_HEADER]: "true",
+      };
+
+      const localApiKey = configService.get<string>("APIKEY");
+      if (localApiKey) {
+        headers["x-api-key"] = localApiKey;
+      }
+
+      if (specificKeyIndex !== undefined) {
+        headers[CCR_TEST_KEY_INDEX_HEADER] = String(specificKeyIndex);
+      }
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/v1/messages",
+        headers,
+        payload: requestBody,
+        signal: controller.signal,
+      } as any);
+
+      const data = parseResponsePayload(response.payload);
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        const responseText = extractResponseContent(data);
+        const trimmedResponse = responseText.trim();
+
+        if (!trimmedResponse) {
+          return {
+            success: false,
+            status: response.statusCode,
+            error: "Model returned empty response",
+            rawResponse: data,
+            debug: {
+              ...debug,
+              detail: "Response extraction failed or content was empty",
+              responseStructure: Object.keys(data),
+              extractedText: responseText
+            },
+            ...(specificKeyIndex !== undefined ? { keyIndex: specificKeyIndex } : {}),
+          };
+        }
+
+        return {
+          success: true,
+          status: response.statusCode,
+          response: responseText,
+          rawResponse: data,
+          debug,
+          ...(specificKeyIndex !== undefined ? { keyIndex: specificKeyIndex } : {}),
+        };
+      }
+
+      return {
+        success: false,
+        status: response.statusCode,
+        error: normalizeErrorPayload(data),
+        rawResponse: data,
+        debug,
+        ...(specificKeyIndex !== undefined ? { keyIndex: specificKeyIndex } : {}),
+      };
+    } catch (error: any) {
+      if (error.name === 'AbortError' || error.code === 'ABORT_ERR') {
+        // Distinguish between timeout and external cancellation
+        if (externalSignal?.aborted) {
+          return { success: false, status: 499, error: "Cancelled", debug };
+        }
+        if (timedOut) {
+          return { success: false, status: 504, error: "Request timeout (20 seconds)", debug };
+        }
+      }
+
+      let errorDetail = `CCR model test failed for ${requestedModel}`;
+      if (error.cause) errorDetail += `\nCause: ${error.cause}`;
+      if (error.code) errorDetail += `\nError code: ${error.code}`;
+      errorDetail += `\nOriginal error: ${error.message || 'Unknown error'}`;
+
+      return { success: false, status: 500, error: errorDetail, debug };
+    } finally {
+      clearTimeout(timeout);
+      externalSignal?.removeEventListener('abort', onExternalAbort);
+    }
+  }
+
+  // Add endpoint to test a specific provider+model (delegates to executeModelTest)
+  app.post("/api/model-test", async (req: any, reply: any) => {
+    const { provider, model, message, keyIndex } = req.body;
+
+    if (!provider || !model) {
+      reply.status(400).send({ success: false, error: "provider and model are required" });
+      return;
+    }
+
+    const result = await executeModelTest(provider, model, message, undefined, keyIndex);
+
+    // Always return 200 to avoid triggering frontend auth redirect
+    reply.status(200).send(result);
+  });
+
+  // Add endpoint to test provider URL connectivity (HEAD request with fallback to GET)
+  app.post("/api/connectivity-test", async (req: any, reply: any) => {
+    const { url } = req.body as { url?: string };
+
+    if (!url) {
+      reply.status(400).send({ success: false, error: "url is required" });
+      return;
+    }
+
+    // Extract base domain URL (protocol + hostname + port)
+    let baseUrl: string;
+    try {
+      const urlObj = new URL(url);
+      baseUrl = `${urlObj.protocol}//${urlObj.hostname}${urlObj.port ? ':' + urlObj.port : ''}`;
+    } catch {
+      reply.status(400).send({ success: false, error: "Invalid URL format" });
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    const startTime = Date.now();
+
+    try {
+      const fetchOptions: RequestInit = {
+        method: "HEAD",
+        signal: controller.signal,
+      };
+
+      // Use proxy if configured
+      const serverInst = (app as any)._server;
+      const configService2 = serverInst?.configService;
+      const httpsProxy = configService2?.getHttpsProxy();
+      if (httpsProxy) {
+        (fetchOptions as any).dispatcher = new ProxyAgent(httpsProxy);
+      }
+
+      let response: Response;
+      try {
+        response = await fetch(baseUrl, fetchOptions);
+      } catch {
+        // HEAD might be rejected, fallback to GET
+        fetchOptions.method = "GET";
+        response = await fetch(baseUrl, fetchOptions);
+      }
+
+      clearTimeout(timeout);
+      const latency = Date.now() - startTime;
+
+      reply.status(200).send({
+        success: true,
+        latency_ms: latency,
+        status: response.status,
+      });
+    } catch (error: any) {
+      clearTimeout(timeout);
+      const latency = Date.now() - startTime;
+
+      if (error.name === "AbortError") {
+        reply.status(200).send({
+          success: false,
+          latency_ms: latency,
+          error: "Connection timeout (10 seconds)",
+        });
+        return;
+      }
+
+      reply.status(200).send({
+        success: false,
+        latency_ms: latency,
+        error: error.message || "Connection failed",
+      });
+    }
+  });
+
+  // Proxy endpoint for fetching models from provider's /v1/models endpoint
+  // This avoids CORS issues when the UI fetches directly from external providers
+  app.post("/api/fetch-models", async (req: any, reply: any) => {
+    const { api_base_url, api_key, forceStandard } = req.body as { api_base_url?: string; api_key?: string; forceStandard?: boolean };
+
+    if (!api_base_url) {
+      reply.status(400).send({ success: false, error: "api_base_url is required" });
+      return;
+    }
+
+    // Extract base URL (strip /v1/... suffix)
+    let baseUrl = api_base_url.replace(/\/$/, '');
+    baseUrl = baseUrl.replace(/\/v1\/?.*$/, '');
+
+    // Get proxy config
+    const serverInst = (app as any)._server;
+    const configService2 = serverInst?.configService;
+    const httpsProxy = configService2?.getHttpsProxy();
+
+    // Step 1: Try NewAPI detection via /api/pricing (no auth, 3s timeout)
+    let newApiData: any = null;
+    if (!forceStandard) {
+    try {
+      const pricingController = new AbortController();
+      const pricingTimeout = setTimeout(() => pricingController.abort(), 3000);
+
+      const fetchOptions: RequestInit = {
+        method: 'GET',
+        signal: pricingController.signal,
+      };
+      if (httpsProxy) {
+        (fetchOptions as any).dispatcher = new ProxyAgent(httpsProxy);
+      }
+
+      const pricingResponse = await fetch(`${baseUrl}/api/pricing`, fetchOptions);
+      clearTimeout(pricingTimeout);
+
+      if (pricingResponse.ok) {
+        const data = await pricingResponse.json();
+        if (data.success === true && data.group_ratio && Array.isArray(data.data)) {
+          newApiData = data;
+        }
+      }
+    } catch {
+      // Not NewAPI or unreachable, continue to /v1/models
+    }
+
+    if (newApiData) {
+      reply.status(200).send({ success: true, type: 'newapi', data: newApiData });
+      return;
+    }
+    }
+
+    // Step 2: Standard /v1/models fetch (api_key optional — some public endpoints don't require auth)
+    try {
+      const modelsController = new AbortController();
+      const modelsTimeout = setTimeout(() => modelsController.abort(), 10000);
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (api_key) {
+        headers['Authorization'] = `Bearer ${api_key}`;
+      }
+
+      const fetchOptions: RequestInit = {
+        method: 'GET',
+        headers,
+        signal: modelsController.signal,
+      };
+      if (httpsProxy) {
+        (fetchOptions as any).dispatcher = new ProxyAgent(httpsProxy);
+      }
+
+      const response = await fetch(`${baseUrl}/v1/models`, fetchOptions);
+      clearTimeout(modelsTimeout);
+
+      if (!response.ok) {
+        let errorDetail = response.statusText;
+        try {
+          const errorBody = await response.text();
+          if (errorBody) errorDetail = `${response.status} - ${errorBody}`;
+        } catch {}
+        reply.status(200).send({ success: false, error: `HTTP ${response.status}: ${errorDetail}` });
+        return;
+      }
+
+      const data = await response.json();
+      reply.status(200).send({ success: true, type: 'models', data });
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        reply.status(200).send({ success: false, error: 'Connection timeout (10 seconds)' });
+        return;
+      }
+      reply.status(200).send({ success: false, error: error.message || 'Failed to fetch models' });
+    }
   });
 
   // Register static file serving with caching
   app.register(fastifyStatic, {
-    root: join(__dirname, "..", "dist"),
+    root: resolveUiDistRoot(),
     prefix: "/ui/",
     maxAge: "1h",
   });
@@ -123,6 +672,184 @@ export const createServer = async (config: any): Promise<any> => {
   // Redirect /ui to /ui/ for proper static file serving
   app.get("/ui", async (_: any, reply: any) => {
     return reply.redirect("/ui/");
+  });
+
+  // SSE log streaming endpoint
+  app.get("/api/logs/stream", async (req: any, reply: any) => {
+    // Set SSE headers
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.setHeader("Access-Control-Allow-Origin", "*");
+
+    const logDir = join(homedir(), ".claude-code-router", "logs");
+    let currentLogFile = "";
+    let fileWatcher: any = null;
+    let dirWatcher: any = null;
+    let lastSize = 0;
+    let isClosed = false;
+
+    // Helper to find latest log file
+    const findLatestLog = () => {
+      if (!existsSync(logDir)) return null;
+      const files = readdirSync(logDir)
+        .filter(f => f.startsWith("ccr-") && f.endsWith(".log"))
+        .sort()
+        .reverse();
+      return files.length > 0 ? join(logDir, files[0]) : null;
+    };
+
+    // Helper to setup file watcher on specific file
+    const setupFileWatcher = (filePath: string, controller: any) => {
+      if (fileWatcher) fileWatcher.close();
+
+      try {
+        const stats = statSync(filePath);
+        lastSize = stats.size;
+        currentLogFile = filePath;
+
+        // Notify client about file switch
+        controller.enqueue(`data: ${JSON.stringify({
+          type: 'system',
+          msg: `Watching log file: ${filePath.split('/').pop()}`
+        })}\n\n`);
+
+        fileWatcher = watch(filePath, { persistent: true }, (eventType) => {
+          if (eventType === 'change' && !isClosed && existsSync(filePath)) {
+            try {
+              const currentStats = statSync(filePath);
+              if (currentStats.size > lastSize) {
+                const fd = openSync(filePath, 'r');
+                const buffer = Buffer.alloc(currentStats.size - lastSize);
+                readSync(fd, buffer, 0, buffer.length, lastSize);
+                closeSync(fd);
+
+                const newContent = buffer.toString('utf8');
+                lastSize = currentStats.size;
+
+                const lines = newContent.split('\n');
+                for (const line of lines) {
+                  if (!line.trim()) continue;
+                  try {
+                    const data = JSON.parse(line);
+                    // Only send routing logs (skip request body logs)
+                    if (data.type === 'routing' && data.targetModel) {
+                      // Translate scenarioType to Chinese label
+                      const scenarioType = data.scenarioType as string;
+                      const scenarioLabel: Record<string, string> = {
+                        'background': '后台任务',
+                        'default': '普通任务',
+                        'longContext': '长上下文',
+                        'think': '思考任务',
+                        'webSearch': '搜索任务',
+                        'compact': '压缩任务',
+                        'image': '图片任务'
+                      };
+                      const label = scenarioLabel[scenarioType] || '普通任务';
+
+                      const event = {
+                        type: 'log',
+                        data: {
+                          id: `${data.reqId}-${data.time}`,
+                          timestamp: new Date(data.time).toLocaleTimeString(),
+                          reqId: data.reqId,
+                          model: data.targetModel,
+                          scenarioType: scenarioType,
+                          scenarioLabel: label,
+                          msg: data.msg,
+                          raw: line
+                        }
+                      };
+                      controller.enqueue(`data: ${JSON.stringify(event)}\n\n`);
+                    }
+
+                    // Handle request completion logs for monitor panel status
+                    if (data.type === 'request_complete') {
+                      const event = {
+                        type: 'request_complete',
+                        data: {
+                          reqId: data.reqId,
+                          provider: data.provider,
+                          model: data.model,
+                          success: data.success,
+                          statusCode: data.statusCode,
+                          error: data.error,
+                        }
+                      };
+                      controller.enqueue(`data: ${JSON.stringify(event)}\n\n`);
+                    }
+                  } catch (e) {
+                    // Ignore parse errors
+                  }
+                }
+              }
+            } catch (err) {
+              console.error('Error reading log update:', err);
+            }
+          }
+        });
+      } catch (err) {
+        console.error('Error setting up file watcher:', err);
+      }
+    };
+
+    const sseStream = new ReadableStream({
+      start(controller) {
+        const initialFile = findLatestLog();
+        if (initialFile) {
+          setupFileWatcher(initialFile, controller);
+        } else {
+          controller.enqueue(`data: ${JSON.stringify({ type: 'system', msg: 'No log files found' })}\n\n`);
+        }
+
+        // Watch directory for rotation (new files)
+        try {
+          if (existsSync(logDir)) {
+            dirWatcher = watch(logDir, { persistent: true }, (eventType, filename) => {
+              if (filename && filename.startsWith("ccr-") && filename.endsWith(".log")) {
+                const latest = findLatestLog();
+                if (latest && latest !== currentLogFile) {
+                  setupFileWatcher(latest, controller);
+                }
+              }
+            });
+          }
+        } catch (err) {
+          console.error('Error watching log directory:', err);
+        }
+
+        // Cleanup on close
+        req.raw.on('close', () => {
+          isClosed = true;
+          if (fileWatcher) fileWatcher.close();
+          if (dirWatcher) dirWatcher.close();
+          try { controller.close(); } catch (e) {}
+        });
+
+        req.raw.on('error', () => {
+          isClosed = true;
+          if (fileWatcher) fileWatcher.close();
+          if (dirWatcher) dirWatcher.close();
+          try { controller.close(); } catch (e) {}
+        });
+      }
+    });
+
+    // Pipe stream to response
+    const reader = sseStream.getReader();
+    const pump = () => {
+      reader.read().then(({ done, value }) => {
+        if (done) {
+          reply.raw.end();
+          return;
+        }
+        reply.raw.write(value);
+        pump();
+      }).catch(() => {
+        reply.raw.end();
+      });
+    };
+    pump();
   });
 
   // Get log file list endpoint
@@ -209,6 +936,33 @@ export const createServer = async (config: any): Promise<any> => {
     } catch (error) {
       console.error("Failed to clear logs:", error);
       reply.status(500).send({ error: "Failed to clear logs" });
+    }
+  });
+
+  // Clear all logs endpoint
+  app.delete("/api/logs/all", async (req: any, reply: any) => {
+    try {
+      const logDir = join(homedir(), ".claude-code-router", "logs");
+
+      if (existsSync(logDir)) {
+        const files = readdirSync(logDir);
+        for (const file of files) {
+          if (file.endsWith('.log')) {
+            const filePath = join(logDir, file);
+            try {
+              // Delete the file
+              unlinkSync(filePath);
+            } catch (err) {
+              console.error(`Failed to delete log file ${file}:`, err);
+            }
+          }
+        }
+      }
+
+      return { success: true, message: "All logs cleared successfully" };
+    } catch (error) {
+      console.error("Failed to clear all logs:", error);
+      reply.status(500).send({ error: "Failed to clear all logs" });
     }
   });
 
@@ -483,6 +1237,490 @@ export const createServer = async (config: any): Promise<any> => {
     const manifest = JSON.parse(entry.getData().toString('utf-8')) as ManifestFile;
     return manifestToPresetFile(manifest);
   }
+
+  // SSE config streaming endpoint
+  app.get("/api/config/stream", async (req: any, reply: any) => {
+    // Set SSE headers
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.setHeader("Access-Control-Allow-Origin", "*");
+    reply.raw.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
+
+    const res = reply.raw;
+    let heartbeatInterval: NodeJS.Timeout | null = null;
+
+    // Send data function
+    const send = (data: string) => {
+      try {
+        res.write(data);
+      } catch (e) {
+        // Client disconnected, cleanup
+        cleanup();
+      }
+    };
+
+    // Cleanup function
+    const cleanup = () => {
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      sseClients.delete(res);
+      try {
+        res.end();
+      } catch (e) {}
+    };
+
+    // Add client to broadcast set
+    sseClients.add(res);
+
+    // Handle connection close
+    req.raw.on('close', cleanup);
+    req.raw.on('error', cleanup);
+
+    // Start the response
+    reply.raw.writeHead(200);
+
+    // Send current config immediately
+    readConfigFile().then(currentConfig => {
+      send(`data: ${JSON.stringify({
+        type: 'config_update',
+        data: currentConfig,
+        timestamp: Date.now()
+      })}\n\n`);
+    }).catch(err => {
+      console.error('Error reading config for SSE:', err);
+    });
+
+    // Send heartbeat every 30 seconds to keep connection alive
+    heartbeatInterval = setInterval(() => {
+      send(': heartbeat\n\n');
+    }, 30000);
+
+    // Return a promise that never resolves to keep the connection open
+    return new Promise(() => {});
+  });
+
+  // SSE restart status endpoint
+  app.get("/api/restart/status", async (req: any, reply: any) => {
+    // Set SSE headers
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.setHeader("Access-Control-Allow-Origin", "*");
+    reply.raw.setHeader("X-Accel-Buffering", "no");
+
+    const res = reply.raw;
+
+    // Send restart preparing status
+    res.write(`data: ${JSON.stringify({ type: 'restart_preparing', timestamp: Date.now() })}\n\n`);
+
+    // Wait 1 second then send service stopping
+    setTimeout(() => {
+      res.write(`data: ${JSON.stringify({ type: 'service_stopping', timestamp: Date.now() })}\n\n`);
+      res.end();
+    }, 1000);
+
+    // Handle connection close
+    req.raw.on('close', () => {
+      try { res.end(); } catch (e) {}
+    });
+
+    return new Promise(() => {});
+  });
+
+  // Get request stats
+  app.get("/api/request-stats", async (req: any, reply: any) => {
+    try {
+      const allStats = requestStatsService.getAllStats() as Map<string, any>;
+      return { stats: serializeRequestStatsMap(allStats) };
+    } catch (error) {
+      console.error("Failed to get request stats:", error);
+      reply.status(500).send({ error: "Failed to get request stats" });
+    }
+  });
+
+  // Get one request stat with full request/response details.
+  app.get("/api/request-stats/detail", async (req: any, reply: any) => {
+    try {
+      const query = req.query || {};
+      const allStats = requestStatsService.getAllStats() as Map<string, any>;
+      let statsKey = typeof query.key === "string" ? query.key : "";
+      let value = statsKey ? allStats.get(statsKey) : undefined;
+
+      if (!value && typeof query.provider === "string" && typeof query.model === "string") {
+        const hasKeyIndex = query.keyIndex !== undefined && query.keyIndex !== "";
+        const parsedKeyIndex = Number(query.keyIndex);
+        statsKey = hasKeyIndex && Number.isFinite(parsedKeyIndex)
+          ? `${query.provider}:#${parsedKeyIndex}:${query.model}`
+          : `${query.provider}:${query.model}`;
+        value = allStats.get(statsKey);
+      }
+
+      if (!statsKey || !value) {
+        reply.status(404).send({ error: "Request stats not found" });
+        return;
+      }
+
+      return { stat: serializeRequestStatsItem(statsKey, value, true) };
+    } catch (error) {
+      console.error("Failed to get request stats detail:", error);
+      reply.status(500).send({ error: "Failed to get request stats detail" });
+    }
+  });
+
+  // Request stats SSE stream
+  app.get("/api/request-stats/stream", async (req: any, reply: any) => {
+    // Set SSE headers
+    reply.raw.setHeader("Content-Type", "text/event-stream");
+    reply.raw.setHeader("Cache-Control", "no-cache");
+    reply.raw.setHeader("Connection", "keep-alive");
+    reply.raw.setHeader("Access-Control-Allow-Origin", "*");
+    reply.raw.setHeader("X-Accel-Buffering", "no");
+
+    const res = reply.raw;
+    let heartbeatInterval: NodeJS.Timeout | null = null;
+    let statsListener: any = null;
+    let clearListener: any = null;
+    let providerClearListener: any = null;
+
+    // Send data function
+    const send = (data: string) => {
+      try {
+        res.write(data);
+      } catch (e) {
+        cleanup();
+      }
+    };
+
+    // Cleanup function
+    const cleanup = () => {
+      if (heartbeatInterval) clearInterval(heartbeatInterval);
+      if (statsListener) requestStatsService.off('stats_update', statsListener);
+      if (clearListener) requestStatsService.off('stats_clear', clearListener);
+      if (providerClearListener) requestStatsService.off('stats_provider_clear', providerClearListener);
+      try { res.end(); } catch (e) {}
+    };
+
+    // Handle connection close
+    req.raw.on('close', cleanup);
+    req.raw.on('error', cleanup);
+
+    // Start response
+    reply.raw.writeHead(200);
+
+    // Send initial stats
+    const allStats = requestStatsService.getAllStats() as Map<string, any>;
+    const initialStats = serializeRequestStatsMap(allStats);
+
+    send(`data: ${JSON.stringify({
+      type: 'initial',
+      data: initialStats,
+      timestamp: Date.now()
+    })}\n\n`);
+
+    // Listen for updates
+    statsListener = (update: any) => {
+      const data = {
+        type: 'update',
+        data: serializeRequestStatsItem(update.key, update.stats),
+        timestamp: Date.now()
+      };
+      send(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    // Listen for clear events
+    clearListener = () => {
+      send(`data: ${JSON.stringify({
+        type: 'clear',
+        timestamp: Date.now()
+      })}\n\n`);
+    };
+
+    providerClearListener = ({ provider }: { provider: string }) => {
+      send(`data: ${JSON.stringify({
+        type: 'provider_clear',
+        provider,
+        timestamp: Date.now()
+      })}\n\n`);
+    };
+
+    requestStatsService.on('stats_update', statsListener);
+    requestStatsService.on('stats_clear', clearListener);
+    requestStatsService.on('stats_provider_clear', providerClearListener);
+
+    // Heartbeat every 30s
+    heartbeatInterval = setInterval(() => {
+      send(': heartbeat\n\n');
+    }, 30000);
+
+    return new Promise(() => {});
+  });
+
+  // Clear request stats
+  app.delete("/api/request-stats", async (req: any, reply: any) => {
+    try {
+      // requestStatsService is imported at the top level
+      requestStatsService.clearAll();
+      return { success: true, message: "Request stats cleared successfully" };
+    } catch (error) {
+      console.error("Failed to clear request stats:", error);
+      reply.status(500).send({ error: "Failed to clear request stats" });
+    }
+  });
+
+  // Clear request stats for one provider
+  app.delete("/api/request-stats/provider/:provider", async (req: any, reply: any) => {
+    try {
+      const provider = decodeURIComponent(req.params.provider);
+      const removed = requestStatsService.clearProvider(provider);
+      return { success: true, removed };
+    } catch (error) {
+      console.error("Failed to clear provider request stats:", error);
+      reply.status(500).send({ error: "Failed to clear provider request stats" });
+    }
+  });
+
+  // ========== Backend Batch Test API ==========
+
+  // Mount references for batch test service to use
+  (app as any)._server = server;
+  (app as any).executeModelTest = executeModelTest;
+
+  // Start a batch test task
+  app.post("/api/batch-test/start", async (req: any, reply: any) => {
+    const { tests, concurrency = 20 } = req.body;
+
+    if (!tests || !Array.isArray(tests) || tests.length === 0) {
+      reply.status(400).send({ success: false, error: "tests array is required and must not be empty" });
+      return;
+    }
+
+    const clampedConcurrency = Math.max(1, Math.min(50, Number(concurrency) || 20));
+
+    // Get TEST_PROMPT from config
+    const serverInstance = (app as any)._server;
+    const configService = serverInstance?.configService;
+    const testMessage = configService?.get("TEST_PROMPT") || undefined;
+
+    const started = batchTestService.start(
+      tests,
+      clampedConcurrency,
+      (app as any).executeModelTest,
+      testMessage
+    );
+
+    if (!started) {
+      reply.status(409).send({ success: false, error: "A batch test is already running. Cancel it first." });
+      return;
+    }
+
+    return { success: true, total: tests.length, concurrency: clampedConcurrency };
+  });
+
+  // Get batch test task status
+  app.get("/api/batch-test/status", async (req: any, reply: any) => {
+    return batchTestService.getStatus();
+  });
+
+  // Cancel the running batch test task
+  app.post("/api/batch-test/cancel", async (req: any, reply: any) => {
+    const result = batchTestService.cancel();
+    if (!result.success) {
+      reply.status(400).send({ success: false, error: "No batch test is currently running" });
+      return;
+    }
+    return result;
+  });
+
+  // Batch test results persistence - GET
+  app.get("/api/batch-test-results", async (req: any, reply: any) => {
+    try {
+      const { BATCH_TEST_RESULTS_FILE } = await import("@CCR/shared");
+      if (existsSync(BATCH_TEST_RESULTS_FILE)) {
+        const content = readFileSync(BATCH_TEST_RESULTS_FILE, 'utf-8');
+        return JSON.parse(content);
+      }
+      return { results: [] };
+    } catch (error) {
+      console.error("Failed to read batch test results:", error);
+      return { results: [] };
+    }
+  });
+
+  // Batch test results persistence - PUT (overwrite)
+  app.put("/api/batch-test-results", async (req: any, reply: any) => {
+    try {
+      const { BATCH_TEST_RESULTS_FILE } = await import("@CCR/shared");
+      if (!existsSync(HOME_DIR)) {
+        mkdirSync(HOME_DIR, { recursive: true });
+      }
+      const body = req.body as { results: any[] };
+      writeFileSync(BATCH_TEST_RESULTS_FILE, JSON.stringify(body, null, 2), 'utf-8');
+      return { success: true };
+    } catch (error) {
+      console.error("Failed to save batch test results:", error);
+      reply.status(500).send({ error: "Failed to save batch test results" });
+    }
+  });
+
+  // Batch test results persistence - DELETE all
+  app.delete("/api/batch-test-results", async (req: any, reply: any) => {
+    try {
+      const result = batchTestService.clear();
+      if (!result.success) {
+        reply.status(409).send(result);
+        return;
+      }
+      return result;
+    } catch (error) {
+      console.error("Failed to clear batch test results:", error);
+      reply.status(500).send({ success: false, error: "Failed to clear batch test results" });
+    }
+  });
+
+  // Batch test results persistence - DELETE provider results
+  app.delete("/api/batch-test-results/provider/:provider", async (req: any, reply: any) => {
+    try {
+      const provider = decodeURIComponent(req.params.provider);
+      const result = batchTestService.clearProvider(provider);
+      if (!result.success) {
+        reply.status(409).send(result);
+        return;
+      }
+      return result;
+    } catch (error) {
+      console.error("Failed to clear provider batch test results:", error);
+      reply.status(500).send({ success: false, error: "Failed to clear provider batch test results" });
+    }
+  });
+
+  // Watch config file for external changes only (skip internal writes from POST /api/config)
+  try {
+    // Get ConfigService instance for hot-reload support
+    const configService = (server as any).configService as ConfigService;
+
+    configWatcher = watch(CONFIG_FILE, { persistent: true }, async (eventType) => {
+      if (eventType === 'change') {
+        // Skip if this change was triggered by our own POST /api/config write
+        if (isInternalConfigWrite) {
+          return;
+        }
+
+        // Debounce: fs.watch may fire multiple times for a single write
+        if (configWatchDebounceTimer) {
+          clearTimeout(configWatchDebounceTimer);
+        }
+        configWatchDebounceTimer = setTimeout(async () => {
+          try {
+            // Trigger ConfigService reload with validation
+            const result = await configService.reloadWithValidation();
+
+            if (result.valid && result.config) {
+              // Reload successful, broadcast new config to SSE clients
+              broadcastConfigChange(result.config);
+              console.log('Config reloaded from external change');
+            } else {
+              // Reload failed, keep old config
+              console.error('Config reload failed:', result.error);
+            }
+          } catch (err) {
+            console.error('Error reloading config:', err);
+          }
+        }, 300);
+      }
+    });
+  } catch (err) {
+    console.error('Error setting up config file watcher:', err);
+  }
+
+  // Watch plugins directory for hot-reload of custom transformers
+  try {
+    // Check if plugins directory exists, skip watcher if not
+    const pluginsDirStats = await stat(PLUGINS_DIR).catch(() => null);
+    if (!pluginsDirStats || !pluginsDirStats.isDirectory()) {
+      console.log('Plugins directory not found, skipping watcher');
+    } else {
+      pluginsWatcher = watch(PLUGINS_DIR, { persistent: true }, async (eventType, filename) => {
+        // Filter for .js files only
+        if (filename && !filename.endsWith('.js')) {
+          return;
+        }
+
+        // Debounce: fs.watch may fire multiple times for a single write
+        if (pluginsWatchDebounceTimer) {
+          clearTimeout(pluginsWatchDebounceTimer);
+        }
+        pluginsWatchDebounceTimer = setTimeout(async () => {
+          try {
+            console.log('Plugins directory changed, syncing to config.transformers...');
+
+            // Step 1: Scan plugins directory for all .js files
+            const { readdirSync } = await import('fs');
+            const pluginFiles = readdirSync(PLUGINS_DIR).filter((f: string) => f.endsWith('.js'));
+            const pluginPaths = new Set(pluginFiles.map((f: string) => join(PLUGINS_DIR, f)));
+
+            // Step 2: Read current config.transformers
+            const currentConfig = await readConfigFile();
+            const currentTransformers = Array.isArray(currentConfig.transformers) ? currentConfig.transformers : [];
+
+            // Step 3: Calculate differences
+            const newTransformers = [...currentTransformers];
+            let configChanged = false;
+
+            // Find plugins that need to be added (in directory but not in config)
+            for (const pluginPath of pluginPaths) {
+              const existsInConfig = currentTransformers.some(
+                (t: any) => t.path === pluginPath
+              );
+              if (!existsInConfig) {
+                console.log(`Adding plugin to config: ${pluginPath}`);
+                newTransformers.push({ path: pluginPath, options: {} });
+                configChanged = true;
+              }
+            }
+
+            // Find plugins that need to be removed (in config but not in directory)
+            // Only remove entries that point to plugins directory
+            for (let i = newTransformers.length - 1; i >= 0; i--) {
+              const transformer = newTransformers[i];
+              if (transformer.path && transformer.path.startsWith(PLUGINS_DIR)) {
+                if (!pluginPaths.has(transformer.path)) {
+                  console.log(`Removing plugin from config: ${transformer.path}`);
+                  newTransformers.splice(i, 1);
+                  configChanged = true;
+                }
+              }
+            }
+
+            // Step 4: Write updated config if changed
+            if (configChanged) {
+              await backupConfigFile();
+              await writeConfigFile({ ...currentConfig, transformers: newTransformers });
+              console.log('Config.synced with plugins directory');
+            } else {
+              console.log('Config already in sync with plugins directory');
+            }
+          } catch (err) {
+            console.error('Error syncing plugins to config:', err);
+          }
+        }, 300);
+      });
+      console.log('Plugins directory watcher started:', PLUGINS_DIR);
+    }
+  } catch (err) {
+    console.error('Error setting up plugins directory watcher:', err);
+  }
+
+  // Cleanup watchers on server close
+  app.addHook('onClose', async () => {
+    if (configWatcher) {
+      configWatcher.close();
+      console.log('Config watcher closed');
+    }
+    if (pluginsWatcher) {
+      pluginsWatcher.close();
+      console.log('Plugins watcher closed');
+    }
+  });
 
   return server;
 };

@@ -9,6 +9,7 @@ import { requestHistoryDB } from '@/lib/db';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export function DebugPage() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
   const [requestData, setRequestData] = useState({
@@ -29,7 +30,7 @@ export function DebugPage() {
   const headersEditorRef = useRef<any>(null);
   const bodyEditorRef = useRef<any>(null);
 
-  // 切换全屏模式
+  // Switch fullscreen mode
   const toggleFullscreen = (editorType: 'headers' | 'body') => {
     const isEnteringFullscreen = fullscreenEditor !== editorType;
     setFullscreenEditor(isEnteringFullscreen ? editorType : null);
@@ -45,7 +46,7 @@ export function DebugPage() {
     }, 300);
   };
 
-  // 从URL参数中解析日志数据
+  // Parse log data from URL params
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const logDataParam = params.get('logData');
@@ -134,7 +135,7 @@ export function DebugPage() {
     }
   }, [location.search]);
 
-  // 发送请求
+  // Send request
   const sendRequest = async () => {
     try {
       setIsLoading(true);
@@ -164,12 +165,12 @@ export function DebugPage() {
       const responseText = await response.text();
       let responseBody = responseText;
 
-      // 尝试解析JSON响应
+      // Attempt to parse JSON response
       try {
         const jsonResponse = JSON.parse(responseText);
         responseBody = JSON.stringify(jsonResponse, null, 2);
       } catch {
-        // 如果不是JSON，保持原样
+        // If not JSON, keep as is
       }
 
       const responseHeadersString = JSON.stringify(responseHeaders, null, 2);
@@ -181,7 +182,7 @@ export function DebugPage() {
         headers: responseHeadersString
       });
 
-      // 保存到IndexedDB
+      // Save to IndexedDB
       await requestHistoryDB.saveRequest({
         url: requestData.url,
         method: requestData.method,
@@ -198,7 +199,7 @@ export function DebugPage() {
       setResponseData({
         status: 0,
         responseTime: 0,
-        body: `请求失败: ${error instanceof Error ? error.message : '未知错误'}`,
+        body: `${t('debug.request_failed')}: ${error instanceof Error ? error.message : 'Unknown error'}`,
         headers: '{}'
       });
     } finally {
@@ -206,7 +207,7 @@ export function DebugPage() {
     }
   };
 
-  // 从历史记录中选择请求
+  // Select request from history
   const handleSelectRequest = (request: import('@/lib/db').RequestHistoryItem) => {
     setRequestData({
       url: request.url,
@@ -223,7 +224,7 @@ export function DebugPage() {
     });
   };
 
-  // 复制cURL命令
+  // Copy cURL command
   const copyCurl = () => {
     try {
       const headers = JSON.parse(requestData.headers);
@@ -231,21 +232,21 @@ export function DebugPage() {
 
       let curlCommand = `curl -X ${requestData.method} "${requestData.url}"`;
 
-      // 添加headers
+      // Add headers
       Object.entries(headers).forEach(([key, value]) => {
         curlCommand += ` \\\n  -H "${key}: ${value}"`;
       });
 
-      // 添加body
+      // Add body
       if (requestData.method !== 'GET' && Object.keys(body).length > 0) {
         curlCommand += ` \\\n  -d '${JSON.stringify(body)}'`;
       }
 
       navigator.clipboard.writeText(curlCommand);
-      alert('cURL命令已复制到剪贴板');
+      alert(t('debug.curl_copied'));
     } catch (error) {
       console.error('Failed to copy cURL:', error);
-      alert('复制cURL命令失败');
+      alert(t('debug.curl_copy_failed'));
     }
   };
 
@@ -257,18 +258,18 @@ export function DebugPage() {
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="sm" onClick={() => navigate('/dashboard')}>
             <ArrowLeft className="h-4 w-4 mr-2" />
-            返回
+            {t('debug.back')}
           </Button>
-          <h1 className="text-xl font-semibold text-gray-800">HTTP 调试器</h1>
+          <h1 className="text-xl font-semibold text-gray-800">{t('debug.title')}</h1>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => setIsHistoryDrawerOpen(true)}>
             <History className="h-4 w-4 mr-2" />
-            历史记录
+            {t('debug.history')}
           </Button>
           <Button variant="outline" onClick={copyCurl}>
             <Copy className="h-4 w-4 mr-2" />
-            复制 cURL
+            {t('debug.copy_curl')}
           </Button>
         </div>
       </header>
@@ -278,12 +279,12 @@ export function DebugPage() {
         {/* 上部分：请求参数配置 - 上中下布局 */}
         <div className="h-1/2 flex flex-col gap-4">
           <div className="bg-white rounded-lg border p-4 flex-1 flex flex-col">
-            <h3 className="font-medium mb-4">请求参数配置</h3>
+            <h3 className="font-medium mb-4">{t('debug.request_config')}</h3>
             <div className="flex flex-col gap-4 flex-1">
               {/* 上：Method、URL和发送请求按钮配置 */}
               <div className="flex gap-4 items-end">
                 <div className="w-32">
-                  <label className="block text-sm font-medium mb-1">Method</label>
+                  <label className="block text-sm font-medium mb-1">{t('debug.method')}</label>
                   <select
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
                     value={requestData.method}
@@ -297,7 +298,7 @@ export function DebugPage() {
                   </select>
                 </div>
                 <div className="flex-1">
-                  <label className="block text-sm font-medium mb-1">URL</label>
+                  <label className="block text-sm font-medium mb-1">{t('debug.url')}</label>
                   <input
                     type="text"
                     className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
@@ -430,7 +431,7 @@ export function DebugPage() {
         <div className="h-1/2 flex flex-col gap-4">
           <div className="flex-1 bg-white rounded-lg border p-4 flex flex-col">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-medium">响应信息</h3>
+              <h3 className="font-medium">{t('debug.response_info')}</h3>
               {responseData.status > 0 && (
                 <div className="flex items-center gap-4 text-sm">
                   <span className="flex items-center gap-1">

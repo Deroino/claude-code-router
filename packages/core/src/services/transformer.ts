@@ -2,6 +2,9 @@ import { Transformer, TransformerConstructor } from "@/types/transformer";
 import { ConfigService } from "./config";
 import Transformers from "@/transformer";
 import Module from "node:module";
+import { homedir } from "os";
+import { join } from "path";
+import { stat, readdir } from "fs/promises";
 
 interface TransformerConfig {
   transformers: Array<{
@@ -15,6 +18,8 @@ interface TransformerConfig {
 export class TransformerService {
   private transformers: Map<string, Transformer | TransformerConstructor> =
     new Map();
+  // Track built-in transformer names to preserve them during hot-reload
+  private builtinTransformerNames: Set<string> = new Set();
 
   constructor(
     private readonly configService: ConfigService,
@@ -85,7 +90,13 @@ export class TransformerService {
   }): Promise<boolean> {
     try {
       if (config.path) {
-        const module = require(require.resolve(config.path));
+        // Clear require cache to ensure fresh load of modified plugins
+        const resolvedPath = require.resolve(config.path);
+        if (require.cache[resolvedPath]) {
+          delete require.cache[resolvedPath];
+        }
+
+        const module = require(resolvedPath);
         if (module) {
           const instance = new module(config.options);
           // Set logger for transformer instance
@@ -114,6 +125,7 @@ export class TransformerService {
     try {
       await this.registerDefaultTransformersInternal();
       await this.loadFromConfig();
+      await this.loadFromPluginsDirectory();
     } catch (error: any) {
       this.logger.error(
         `TransformerService init error: ${error.message}\nStack: ${error.stack}`
@@ -121,18 +133,34 @@ export class TransformerService {
     }
   }
 
+  /**
+   * Reload custom transformers from config and plugins directory.
+   * Built-in transformers are preserved.
+   */
+  async reloadCustomTransformers(): Promise<void> {
+    // Remove all non-built-in transformers
+    for (const name of Array.from(this.transformers.keys())) {
+      if (!this.builtinTransformerNames.has(name)) {
+        this.transformers.delete(name);
+      }
+    }
+    // Reload from config and plugins
+    await this.loadFromConfig();
+    await this.loadFromPluginsDirectory();
+    this.logger.info('Custom transformers reloaded');
+  }
+
   private async registerDefaultTransformersInternal(): Promise<void> {
     try {
       Object.values(Transformers).forEach(
         (TransformerStatic: any) => {
+          let name: string;
           if (
             "TransformerName" in TransformerStatic &&
             typeof TransformerStatic.TransformerName === "string"
           ) {
-            this.registerTransformer(
-              TransformerStatic.TransformerName,
-              TransformerStatic
-            );
+            name = TransformerStatic.TransformerName;
+            this.registerTransformer(name, TransformerStatic);
           } else {
             const transformerInstance = new TransformerStatic();
             // Set logger for transformer instance
@@ -142,11 +170,11 @@ export class TransformerService {
             ) {
               (transformerInstance as any).logger = this.logger;
             }
-            this.registerTransformer(
-              transformerInstance.name!,
-              transformerInstance
-            );
+            name = transformerInstance.name!;
+            this.registerTransformer(name, transformerInstance);
           }
+          // Mark as built-in to preserve during hot-reload
+          this.builtinTransformerNames.add(name);
         }
       );
     } catch (error) {
@@ -158,8 +186,58 @@ export class TransformerService {
     const transformers = this.configService.get<
       TransformerConfig["transformers"]
     >("transformers", []);
-    for (const transformer of transformers) {
-      await this.registerTransformerFromConfig(transformer);
+    // Use Promise.allSettled to load transformers in parallel
+    const results = await Promise.allSettled(
+      transformers.map(transformer =>
+        this.registerTransformerFromConfig(transformer)
+      )
+    );
+    // Log any failures
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        this.logger.error(
+          `Failed to load transformer at index ${index}: ${result.reason}`
+        );
+      }
+    });
+  }
+
+  private async loadFromPluginsDirectory(): Promise<void> {
+    try {
+      const pluginsDir = join(homedir(), ".claude-code-router", "plugins");
+      const dirStats = await stat(pluginsDir).catch(() => null);
+      if (!dirStats || !dirStats.isDirectory()) {
+        return;
+      }
+
+      const files = await readdir(pluginsDir);
+
+      // Load plugins in parallel
+      const loadPromises = files
+        .filter(f => f.endsWith('.js'))
+        .map(async (file) => {
+          const filePath = join(pluginsDir, file);
+
+          const transformersFromConfig = this.configService.get<
+            TransformerConfig["transformers"]
+          >("transformers", []);
+
+          const isAlreadyConfigured = transformersFromConfig.some(
+            t => t.path === filePath
+          );
+
+          if (!isAlreadyConfigured) {
+            this.logger.info(`Loading transformer from plugins directory: ${filePath}`);
+            await this.registerTransformerFromConfig({
+              path: filePath,
+              options: {}
+            });
+          }
+        });
+
+      await Promise.allSettled(loadPromises);
+    } catch (error: any) {
+      this.logger.warn(`Failed to load transformers from plugins directory: ${error.message}`);
     }
   }
 }

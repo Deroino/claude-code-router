@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { History, Trash2, Clock, X } from 'lucide-react';
 import { requestHistoryDB, type RequestHistoryItem } from '@/lib/db';
+import { useTranslation } from 'react-i18next';
 
 interface RequestHistoryDrawerProps {
   isOpen: boolean;
@@ -10,6 +11,7 @@ interface RequestHistoryDrawerProps {
 }
 
 export function RequestHistoryDrawer({ isOpen, onClose, onSelectRequest }: RequestHistoryDrawerProps) {
+  const { t } = useTranslation();
   const [requests, setRequests] = useState<RequestHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -42,7 +44,7 @@ export function RequestHistoryDrawer({ isOpen, onClose, onSelectRequest }: Reque
   };
 
   const handleClearAll = async () => {
-    if (window.confirm('确定要清空所有请求历史吗？')) {
+    if (window.confirm(t('request_history.clear_confirm'))) {
       try {
         await requestHistoryDB.clearAllRequests();
         setRequests([]);
@@ -57,10 +59,10 @@ export function RequestHistoryDrawer({ isOpen, onClose, onSelectRequest }: Reque
     const now = new Date();
     const diff = now.getTime() - date.getTime();
     const minutes = Math.floor(diff / 60000);
-    
-    if (minutes < 1) return '刚刚';
-    if (minutes < 60) return `${minutes}分钟前`;
-    if (minutes < 1440) return `${Math.floor(minutes / 60)}小时前`;
+
+    if (minutes < 1) return t('request_history.just_now');
+    if (minutes < 60) return t('request_history.minutes_ago', { minutes });
+    if (minutes < 1440) return t('request_history.hours_ago', { hours: Math.floor(minutes / 60) });
     return date.toLocaleDateString();
   };
 
@@ -80,17 +82,17 @@ export function RequestHistoryDrawer({ isOpen, onClose, onSelectRequest }: Reque
         <div className="flex items-center justify-between p-4 border-b">
           <div className="flex items-center gap-2">
             <History className="h-5 w-5" />
-            <h2 className="text-lg font-semibold">请求历史</h2>
+            <h2 className="text-lg font-semibold">{t('request_history.title')}</h2>
           </div>
           <div className="flex items-center gap-2">
-            <Button 
-              variant="outline" 
-              size="sm" 
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handleClearAll}
               disabled={requests.length === 0}
             >
               <Trash2 className="h-4 w-4 mr-1" />
-              清空
+              {t('request_history.clear')}
             </Button>
             <Button variant="ghost" size="sm" onClick={onClose}>
               <X className="h-4 w-4" />
@@ -102,7 +104,7 @@ export function RequestHistoryDrawer({ isOpen, onClose, onSelectRequest }: Reque
         <div className="flex-1 overflow-y-auto p-4">
           {loading ? (
             <div className="flex items-center justify-center h-32 text-gray-500">
-              加载中...
+              {t('request_history.loading')}
             </div>
           ) : requests.length > 0 ? (
             <div className="space-y-2">
@@ -158,8 +160,8 @@ export function RequestHistoryDrawer({ isOpen, onClose, onSelectRequest }: Reque
           ) : (
             <div className="text-center text-gray-500 py-8">
               <History className="h-12 w-12 mx-auto mb-4 text-gray-300" />
-              <p>暂无请求历史</p>
-              <p className="text-sm mt-2">发送请求后会在此显示历史记录</p>
+              <p>{t('request_history.no_history')}</p>
+              <p className="text-sm mt-2">{t('request_history.no_history_hint')}</p>
             </div>
           )}
         </div>

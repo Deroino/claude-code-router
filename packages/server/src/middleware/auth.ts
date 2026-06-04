@@ -1,10 +1,19 @@
 import { FastifyRequest, FastifyReply } from "fastify";
+import { ConfigService } from "@musistudio/llms";
 
 export const apiKeyAuth =
-  (config: any) =>
+  (configService: ConfigService) =>
   async (req: FastifyRequest, reply: FastifyReply, done: () => void) => {
+    // Get latest config from ConfigService (supports hot-reload)
+    const config = configService.getAll();
+
+    // Check if authentication is explicitly disabled via config
+    if (config.noAuth === true) {
+      return done();
+    }
+
     // Public endpoints that don't require authentication
-    const publicPaths = ["/", "/health"];
+    const publicPaths = ["/", "/health", "/api/logs/stream", "/api/model-test", "/api/config/stream"];
     if (publicPaths.includes(req.url) || req.url.startsWith("/ui")) {
       return done();
     }

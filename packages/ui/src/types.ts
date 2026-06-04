@@ -3,13 +3,34 @@ export interface ProviderTransformer {
   [key: string]: any; // Allow for model-specific transformers
 }
 
+// Structured API key entry with optional explicit model assignment
+export interface ApiKeyEntry {
+  key: string;
+  models?: string[];  // If omitted, supports all provider models
+  group?: string;     // NewAPI group name (UI metadata, resolved to models on assignment)
+}
+
+// API key configuration: single string, array of strings, or mixed array with objects
+export type ApiKeyConfig = string | (string | ApiKeyEntry)[];
+
 export interface Provider {
   name: string;
   api_base_url: string;
-  api_key: string;
-  models: string[];
+  api_key: ApiKeyConfig;
   transformer?: ProviderTransformer;
 }
+
+export const ROUTER_MODEL_FIELDS = [
+  'default',
+  'background',
+  'think',
+  'longContext',
+  'webSearch',
+  'image',
+  'compact',
+] as const;
+
+export type RouterModelField = typeof ROUTER_MODEL_FIELDS[number];
 
 export interface RouterConfig {
     default: string;
@@ -19,6 +40,7 @@ export interface RouterConfig {
     longContextThreshold: number;
     webSearch: string;
     image: string;
+    compact?: string;
     custom?: any;
 }
 
@@ -26,6 +48,11 @@ export interface Transformer {
     name?: string;
     path: string;
     options?: Record<string, any>;
+}
+
+export interface ModelGroup {
+  name: string;
+  models: string[]; // Each item is "providerName,modelName" format
 }
 
 export interface StatusLineModuleConfig {
@@ -53,8 +80,10 @@ export interface Config {
   Providers: Provider[];
   Router: RouterConfig;
   transformers: Transformer[];
+  ModelGroups?: ModelGroup[];
   StatusLine?: StatusLineConfig;
   forceUseImageAgent?: boolean;
+  noAuth?: boolean;
   // Top-level settings
   LOG: boolean;
   LOG_LEVEL: string;
@@ -65,6 +94,7 @@ export interface Config {
   API_TIMEOUT_MS: string;
   PROXY_URL: string;
   CUSTOM_ROUTER_PATH?: string;
+  TEST_PROMPT?: string;
 }
 
 export type AccessLevel = 'restricted' | 'full';

@@ -66,6 +66,19 @@ export function SettingsDialog({ isOpen, onOpenChange }: SettingsDialogProps) {
         <div className="space-y-4 p-4 px-8 overflow-y-auto flex-1">
           <div className="flex items-center space-x-2">
             <Switch
+              id="noAuth"
+              checked={config.noAuth || false}
+              onCheckedChange={(checked) => setConfig({ ...config, noAuth: checked })}
+            />
+            <Label
+              htmlFor="noAuth"
+              className="transition-all-ease hover:scale-[1.02] cursor-pointer"
+            >
+              No Auth (Disable Authentication)
+            </Label>
+          </div>
+          <div className="flex items-center space-x-2">
+            <Switch
               id="log"
               checked={config.LOG}
               onCheckedChange={handleLogChange}
@@ -224,6 +237,21 @@ export function SettingsDialog({ isOpen, onOpenChange }: SettingsDialogProps) {
               value={config.CUSTOM_ROUTER_PATH || ""}
               onChange={(e) => setConfig({ ...config, CUSTOM_ROUTER_PATH: e.target.value })}
               placeholder={t("toplevel.custom_router_path_placeholder")}
+              className="transition-all-ease focus:scale-[1.01]"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label
+              htmlFor="test-prompt"
+              className="transition-all-ease hover:scale-[1.01] cursor-pointer"
+            >
+              Test Prompt
+            </Label>
+            <Input
+              id="test-prompt"
+              value={config.TEST_PROMPT || ""}
+              onChange={(e) => setConfig({ ...config, TEST_PROMPT: e.target.value })}
+              placeholder="Hello, please respond with 'OK' if you can understand this message."
               className="transition-all-ease focus:scale-[1.01]"
             />
           </div>
